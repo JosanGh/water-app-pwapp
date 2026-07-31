@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
+
 import {
   Droplets, Warehouse, PackageOpen, Factory, Wallet, FileBarChart, ShieldCheck,
   LogOut, Plus, ChevronRight, AlertTriangle, CheckCircle2, Wifi, WifiOff,
   Users, Settings2, Scale, TrendingUp, TrendingDown, ClipboardList, X, Lock,
-  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, UserPlus, Mail
+  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -27,12 +28,19 @@ const STORAGE_KEY = "pureledger-ghana-erp-db";
 
 const emptyData = {
   users: [
-    { id: "u1", name: "Admin Owner", role: "owner", password: "123", email: "admin@pureledger.com" },
+    { id: "u1", name: "Super Admin", role: "owner", password: "123", email: "admin@pureledger.com" },
     { id: "u2", name: "Factory Manager", role: "manager", password: "123" },
     { id: "u3", name: "Plant Cashier", role: "cashier", password: "123" },
     { id: "d1", name: "Kwame (Truck GT-1022-22)", role: "driver", password: "123", truckNo: "GT-1022-22" },
     { id: "d2", name: "Kofi (Truck WR-5541-21)", role: "driver", password: "123", truckNo: "WR-5541-21" },
   ],
+  businessDetails: {
+    name: "",
+    address: "",
+    phone: "",
+    tin: "",
+    isRegistered: false,
+  },
   rollTypes: [],
   intake: [],
   issuance: [],
@@ -100,6 +108,7 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [showBusinessModal, setShowBusinessModal] = useState(false);
 
   useEffect(() => {
     loadData().then((d) => {
@@ -141,6 +150,34 @@ export default function App() {
     });
   }, [session]);
 
+  const handleLogin = (s) => {
+    setSession(s);
+    setPage(s.role === "cashier" ? "sales" : s.role === "driver" ? "reports" : "dashboard");
+    showToast(`Welcome, ${s.name}`);
+
+    // Prompt Admin for business registration if not yet registered
+    if (s.role === "owner" && !data.businessDetails?.isRegistered) {
+      setShowBusinessModal(true);
+    }
+  };
+
+  const handleSaveBusinessDetails = (details) => {
+    mutate((prev) => ({
+      ...prev,
+      businessDetails: {
+        ...details,
+        isRegistered: true,
+      },
+      settings: {
+        ...prev.settings,
+        companyName: details.name || prev.settings.companyName,
+      },
+    }), "Updated Business Details", details.name);
+
+    setShowBusinessModal(false);
+    showToast("Business Details Saved Successfully!");
+  };
+
   if (!loaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0B3B45]">
@@ -156,19 +193,7 @@ export default function App() {
     return (
       <LoginScreen
         users={data.users}
-        onLogin={(s) => { 
-          setSession(s); 
-          setPage(s.role === "cashier" ? "sales" : s.role === "driver" ? "reports" : "dashboard"); 
-          showToast(`Welcome, ${s.name}`); 
-        }}
-        onSignupAdmin={(newAdmin) => {
-          setData((prev) => {
-            const next = { ...prev, users: [...prev.users, newAdmin] };
-            saveData(next);
-            return next;
-          });
-          showToast(`Admin account registered for ${newAdmin.name}!`);
-        }}
+        onLogin={handleLogin}
         onResetAdminPassword={(email, newPass) => {
           let updated = false;
           setData((prev) => {
@@ -229,6 +254,15 @@ export default function App() {
           </main>
         </div>
       </div>
+
+      {showBusinessModal && (
+        <BusinessDetailsModal
+          initialDetails={data.businessDetails}
+          onSave={handleSaveBusinessDetails}
+          onSkip={() => setShowBusinessModal(false)}
+        />
+      )}
+
       {toast && <Toast msg={toast.msg} tone={toast.tone} />}
     </div>
   );
@@ -257,72 +291,56 @@ const CSS_TOOLKIT = `
 .pw-sidebar .pw-nav-item { color:#B9CFCE; }
 .pw-sidebar .pw-nav-item:hover { background-color:#12505C; }
 .pw-sidebar .pw-nav-item-active { background-color:#1C8C9E !important; color:#0B3B45 !important; font-weight:600; }
+
+@media print {
+  body * { visibility: hidden; }
+  #printable-area, #printable-area *, #printable-receipt, #printable-receipt * { visibility: visible; }
+  #printable-area { position: absolute; left: 0; top: 0; width: 100%; }
+  #printable-receipt { position: absolute; left: 0; top: 0; width: 100%; max-width: 320px; margin: 0 auto; padding: 10px; background: white; color: black; }
+}
 `;
 
 /* ---------------------------------------------------------------------- */
-/*  UNIFIED LOGIN & ONE-TIME ADMIN SIGNUP SCREEN                          */
+/*  LOGIN SCREEN                                                           */
 /* ---------------------------------------------------------------------- */
-function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
-  const [view, setView] = useState("login"); // 'login' | 'signup' | 'forgot'
+function LoginScreen({ users, onLogin, onResetAdminPassword }) {
+  const [view, setView] = useState("login");
   const [selectedUser, setSelectedUser] = useState(users[0] || null);
   const [password, setPassword] = useState("");
+  const [fullNameInput, setFullNameInput] = useState("");
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
-  // One-Time Admin Setup Check
-  const hasAdmin = useMemo(() => users.some((u) => u.role === "owner"), [users]);
-
-  // Signup Fields
-  const [adminCode, setAdminCode] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newEmail, setNewEmail] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-
-  // Forgot Password Fields
   const [resetEmail, setResetEmail] = useState("");
   const [resetPassword, setResetPassword] = useState("");
 
   const handleLogin = (e) => {
     e.preventDefault();
     if (!selectedUser) return;
+
     if (selectedUser.password && password !== selectedUser.password) {
-      setError("Incorrect password!");
-      return;
-    }
-    onLogin({ id: selectedUser.id, name: selectedUser.name, role: selectedUser.role });
-  };
-
-  const handleSignup = (e) => {
-    e.preventDefault();
-    if (hasAdmin) {
-      setError("Admin account already exists! Signup is permanently disabled.");
-      return;
-    }
-    if (adminCode !== "admin123") {
-      setError("Invalid Admin Master Authorization Code!");
-      return;
-    }
-    if (!newName || !newEmail || !newPassword) {
-      setError("Please fill out all fields.");
+      setError("Incorrect password! Access denied.");
       return;
     }
 
-    const newAdmin = {
-      id: uid(),
-      name: newName,
-      email: newEmail,
-      role: "owner",
-      password: newPassword,
-    };
+    if (fullNameInput && fullNameInput.trim().toLowerCase() !== selectedUser.name.trim().toLowerCase()) {
+      setError("Full Name mismatch! Please type exact full name.");
+      return;
+    }
 
-    onSignupAdmin(newAdmin);
-    setSelectedUser(newAdmin);
-    setView("login");
-    setAdminCode(""); setNewName(""); setNewEmail(""); setNewPassword(""); setError("");
+    onLogin({
+      id: selectedUser.id,
+      name: selectedUser.name,
+      role: selectedUser.role,
+    });
   };
 
   const handleForgot = (e) => {
     e.preventDefault();
+    if (resetPassword.length < 6) {
+      setError("New password must be at least 6 characters long.");
+      return;
+    }
     const ok = onResetAdminPassword(resetEmail, resetPassword);
     if (ok) {
       setSuccessMsg("Admin password updated successfully! Please log in.");
@@ -348,10 +366,10 @@ function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
           </div>
         </div>
 
-        {/* UNIFIED LOGIN VIEW */}
         {view === "login" && (
           <form onSubmit={handleLogin} className="space-y-4">
             {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
+            
             <div>
               <label className="text-xs font-semibold text-[#5B6B68] uppercase">Select User / Driver Account</label>
               <select
@@ -359,6 +377,7 @@ function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
                 onChange={(e) => {
                   const u = users.find((x) => x.id === e.target.value);
                   setSelectedUser(u);
+                  setFullNameInput(u ? u.name : "");
                   setError("");
                 }}
                 className="inp mt-1"
@@ -372,7 +391,19 @@ function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Enter Password</label>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Verify Full Name</label>
+              <input
+                type="text"
+                value={fullNameInput || (selectedUser ? selectedUser.name : "")}
+                onChange={(e) => { setFullNameInput(e.target.value); setError(""); }}
+                placeholder="Enter exact full name"
+                className="inp mt-1"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Password Security Verification</label>
               <input
                 type="password"
                 value={password}
@@ -397,93 +428,10 @@ function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
               >
                 <Mail size={13} /> Admin Password Reset (Email Auth)
               </button>
-
-              {!hasAdmin && (
-                <button
-                  type="button"
-                  onClick={() => { setView("signup"); setError(""); setSuccessMsg(""); }}
-                  className="text-xs font-bold text-[#1C8C9E] hover:underline flex items-center justify-center gap-1"
-                >
-                  <UserPlus size={14} /> One-Time Admin Setup
-                </button>
-              )}
             </div>
           </form>
         )}
 
-        {/* ONE-TIME ADMIN SIGNUP */}
-        {view === "signup" && !hasAdmin && (
-          <form onSubmit={handleSignup} className="space-y-3">
-            <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
-              <p className="text-xs font-bold text-[#0B3B45]">One-Time Admin Setup</p>
-              <p className="text-[11px] text-[#5B6B68]">Enter master authorization key <code className="bg-white px-1 font-mono text-[#0B3B45]">admin123</code> to create the single owner account.</p>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Master Code</label>
-              <input
-                type="password"
-                value={adminCode}
-                onChange={(e) => { setAdminCode(e.target.value); setError(""); }}
-                placeholder="Enter admin key"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Admin Full Name</label>
-              <input
-                type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Ama Serwaa"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Admin Email (For Pass Reset)</label>
-              <input
-                type="email"
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                placeholder="admin@company.com"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Account Password</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Set secure password"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            {error && <p className="text-xs font-semibold text-[#C4472F]">{error}</p>}
-
-            <button type="submit" className="btn-primary w-full py-2.5 mt-2">
-              Complete Admin Registration
-            </button>
-
-            <button
-              type="button"
-              onClick={() => { setView("login"); setError(""); }}
-              className="w-full text-center text-xs text-gray-500 hover:underline mt-2"
-            >
-              Back to Login
-            </button>
-          </form>
-        )}
-
-        {/* ADMIN EMAIL AUTH RESET */}
         {view === "forgot" && (
           <form onSubmit={handleForgot} className="space-y-3">
             <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
@@ -504,7 +452,7 @@ function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">New Password</label>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">New Secure Password</label>
               <input
                 type="password"
                 value={resetPassword}
@@ -531,7 +479,67 @@ function LoginScreen({ users, onLogin, onSignupAdmin, onResetAdminPassword }) {
           </form>
         )}
 
-        <p className="text-center text-[11px] font-mono text-[#5B6B68] mt-4">PWA ACTIVE · OFF-GRID STANDALONE READY</p>
+        <p className="text-center text-[11px] font-mono text-[#5B6B68] mt-4">PWA ACTIVE · LOCALSTORAGE OFFLINE SAFE</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  BUSINESS DETAILS ONBOARDING / SETUP MODAL                              */
+/* ---------------------------------------------------------------------- */
+function BusinessDetailsModal({ initialDetails, onSave, onSkip }) {
+  const [name, setName] = useState(initialDetails?.name || "");
+  const [address, setAddress] = useState(initialDetails?.address || "");
+  const [phone, setPhone] = useState(initialDetails?.phone || "");
+  const [tin, setTin] = useState(initialDetails?.tin || "");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSave({ name, address, phone, tin });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div id="myStyle" className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
+        <div className="flex items-center gap-2 border-b pb-3">
+          <Building className="text-[#0B3B45]" size={22} />
+          <div>
+            <h3 className="font-bold text-[#0B3B45] text-base">Register Business Details</h3>
+            <p className="text-xs text-gray-500">Provide company information for invoices and receipts.</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business / Company Name *</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ghana Pure Water Ltd" className="inp mt-1" required />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business Phone Number</label>
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +233 24 123 4567" className="inp mt-1" />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business Address / Location</label>
+            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="e.g. Plot 12 Industrial Area, Accra" className="inp mt-1" />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Tax Identification Number (TIN / GRA)</label>
+            <input value={tin} onChange={(e) => setTin(e.target.value)} placeholder="e.g. C0001234567" className="inp mt-1" />
+          </div>
+
+          <div className="pt-2 flex flex-col gap-2">
+            <button type="submit" className="btn-primary w-full py-2.5">
+              Save Business Details
+            </button>
+            <button type="button" onClick={onSkip} className="text-xs text-gray-500 hover:underline text-center">
+              Register Business Details Later
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -605,7 +613,7 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
           <p className="text-sm font-semibold">{session.name}</p>
           <p className="text-[11px] text-[#5B6B68]">{ROLES[session.role]?.label || session.role}</p>
         </div>
-        <div className="w-8 h-8 rounded-full bg-[#0B3B45] flex items-center justify-center text-white">
+        <div className="w-8 h-8 rounded-full bg-[#0B3B45] flex items-center justify-center text-white" id="bell">
           <Icon size={14} />
         </div>
         <div className="relative">
@@ -618,7 +626,7 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
             )}
           </button>
           {notifOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-[#DDE3DA] shadow-xl z-50 p-3">
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-[#DDE3DA] shadow-xl z-50 p-3" id="notify">
               <div className="flex items-center justify-between pb-2 border-b border-[#EDEFEA]">
                 <p className="font-bold text-xs text-[#0B3B45]">System Notifications</p>
                 <button onClick={() => mutate((prev) => ({ ...prev, notifications: [] }), "Cleared Notifications", "")} className="text-[10px] text-[#C4472F]">Clear All</button>
@@ -1265,7 +1273,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
           </div>
         </div>
       ) : (
-        <form onSubmit={handleRunProduction} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4 max-w-xl">
+        <form onSubmit={handleRunProduction} className="bg-[#FFFFFF] p-5 rounded-2xl border border-[#DDE3DA] space-y-4 max-w-xl">
           <p className="font-bold text-[#0B3B45]">Record New Production Run</p>
           <div>
             <label className="text-xs font-semibold text-gray-500">Film Roll Type</label>
@@ -1334,7 +1342,78 @@ function ProductionModule({ data, mutate, session, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  SALES, DRIVER TRACKING & BANK DEPOSIT MODULE                          */
+/*  PRINTABLE RECEIPT MODAL                                                */
+/* ---------------------------------------------------------------------- */
+function ReceiptModal({ sale, companyName, driversList, onClose }) {
+  if (!sale) return null;
+  const driver = driversList.find((d) => d.id === sale.driverId);
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl relative">
+        <button onClick={onClose} className="absolute top-3 right-3 text-gray-400 hover:text-black">
+          <X size={18} />
+        </button>
+
+        <div id="printable-receipt" className="text-center font-mono text-xs space-y-3">
+          <div className="border-b border-dashed border-gray-300 pb-3">
+            <div className="flex justify-center items-center gap-1 text-[#0B3B45] font-bold text-base">
+              <Droplets size={18} />
+              <span>{companyName || "PureLedger Water"}</span>
+            </div>
+            <p className="text-[10px] text-gray-500 uppercase mt-0.5">Sachet Water Purchase Receipt</p>
+            <p className="text-[9px] text-gray-400">Ref ID: #{sale.id.toUpperCase()}</p>
+          </div>
+
+          <div className="text-left text-[11px] space-y-1 py-1">
+            <div className="flex justify-between"><span className="text-gray-500">Date/Time:</span><span>{new Date(sale.timestamp || Date.now()).toLocaleString()}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Customer:</span><span className="font-bold">{sale.customer}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Driver / Truck:</span><span>{driver ? driver.name : "Direct Sale"}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Payment Channel:</span><span className="uppercase font-semibold text-blue-800">{sale.method}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Cashier:</span><span>{sale.recordedBy}</span></div>
+          </div>
+
+          <div className="border-t border-b border-dashed border-gray-300 py-2 space-y-1.5">
+            <div className="flex justify-between text-left font-bold border-b pb-1">
+              <span>Item Description</span>
+              <span>Total</span>
+            </div>
+            <div className="flex justify-between text-left">
+              <span>Sachet Water ({sale.bagsSold} bags @ {fmtGHS(sale.pricePerBag)})</span>
+              <span className="font-bold">{fmtGHS(sale.totalAmount)}</span>
+            </div>
+          </div>
+
+          <div className="pt-1 flex justify-between items-center text-sm font-bold">
+            <span>TOTAL PAID:</span>
+            <span className="text-base text-green-700">{fmtGHS(sale.amountPaid)}</span>
+          </div>
+
+          <div className="border-t border-dashed border-gray-300 pt-3 text-[10px] text-gray-500">
+            <p>Thank you for your business!</p>
+            <p className="text-[9px] text-gray-400 mt-0.5">PureLedger ERP · Verified Offline Transaction</p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <button onClick={handlePrint} className="btn-primary flex-1 py-2">
+            <Printer size={15} /> Print Receipt
+          </button>
+          <button onClick={onClose} className="px-3 py-2 border rounded-lg text-xs font-bold text-gray-600 hover:bg-gray-100">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  SALES & BANK DEPOSIT MODULE                                           */
 /* ---------------------------------------------------------------------- */
 function SalesModule({ data, mutate, session, showToast }) {
   const driversList = useMemo(() => data.users.filter((u) => u.role === "driver"), [data.users]);
@@ -1348,6 +1427,8 @@ function SalesModule({ data, mutate, session, showToast }) {
 
   const [depositAmount, setDepositAmount] = useState("");
   const [bankName, setBankName] = useState("");
+
+  const [activeReceiptSale, setActiveReceiptSale] = useState(null);
 
   const handleSale = (e) => {
     e.preventDefault();
@@ -1367,28 +1448,28 @@ function SalesModule({ data, mutate, session, showToast }) {
     const pricePerBag = data.settings.pricePerBag || 5.0;
     const totalAmount = Number(bagsSold) * pricePerBag;
 
+    const newSale = {
+      id: uid(),
+      date: todayISO(),
+      timestamp: new Date().toISOString(),
+      driverId,
+      customer: customer || "Direct Customer",
+      bagsSold: Number(bagsSold),
+      pricePerBag,
+      totalAmount,
+      amountPaid: totalAmount,
+      method: paymentMethod,
+      recordedBy: session.name,
+    };
+
     mutate((prev) => ({
       ...prev,
-      sales: [
-        {
-          id: uid(),
-          date: todayISO(),
-          timestamp: new Date().toISOString(),
-          driverId,
-          customer: customer || "Direct Customer",
-          bagsSold: Number(bagsSold),
-          pricePerBag,
-          totalAmount,
-          amountPaid: totalAmount,
-          method: paymentMethod,
-          recordedBy: session.name,
-        },
-        ...prev.sales,
-      ],
+      sales: [newSale, ...prev.sales],
     }), "Recorded Sale", `${bagsSold} bags sold to ${customer || "Direct Customer"}`);
 
     setBagsSold(""); setCustomer("");
     showToast("Sale Recorded Successfully!");
+    setActiveReceiptSale(newSale);
   };
 
   const handleBankDeposit = (e) => {
@@ -1424,11 +1505,10 @@ function SalesModule({ data, mutate, session, showToast }) {
     <div className="space-y-6">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Sales, Drivers & Cash</p>
-        <p className="text-sm text-[#5B6B68]">Record sales against trucks, verify cash, and execute matched bank deposits.</p>
+        <p className="text-sm text-[#5B6B68]">Record sales against trucks, print customer receipts, and execute bank deposits.</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        {/* SALE ENTRY FORM */}
         <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
           <div className="flex justify-between items-center">
             <p className="font-bold text-[#0B3B45]">Record Sachet Water Sale</p>
@@ -1477,12 +1557,13 @@ function SalesModule({ data, mutate, session, showToast }) {
                 </select>
               </div>
 
-              <button type="submit" className="btn-primary w-full py-2.5">Complete Sale</button>
+              <button type="submit" className="btn-primary w-full py-2.5">
+                <Receipt size={16} /> Complete Sale & Print Receipt
+              </button>
             </form>
           )}
         </div>
 
-        {/* BANK DEPOSIT FORM */}
         <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
           <div className="flex justify-between items-center">
             <p className="font-bold text-[#0B3B45]">Matched Bank Deposit</p>
@@ -1506,12 +1587,61 @@ function SalesModule({ data, mutate, session, showToast }) {
           </form>
         </div>
       </div>
+
+      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+        <p className="font-bold text-[#0B3B45] mb-3">Recent Sales Transactions & Purchase Receipts</p>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-[#F7F8F5] text-left">
+              <th className="p-2">Date/Time</th>
+              <th className="p-2">Customer</th>
+              <th className="p-2">Driver</th>
+              <th className="p-2 text-right">Bags Sold</th>
+              <th className="p-2 text-right">Total Amount</th>
+              <th className="p-2">Method</th>
+              <th className="p-2 text-center">Receipt</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.sales.map((s) => {
+              const drv = driversList.find((d) => d.id === s.driverId);
+              return (
+                <tr key={s.id} className="border-t">
+                  <td className="p-2 font-mono">{s.date}</td>
+                  <td className="p-2 font-semibold">{s.customer}</td>
+                  <td className="p-2 text-blue-900">{drv?.name || "Direct Sale"}</td>
+                  <td className="p-2 text-right font-mono">{s.bagsSold}</td>
+                  <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
+                  <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
+                  <td className="p-2 text-center">
+                    <button
+                      onClick={() => setActiveReceiptSale(s)}
+                      className="px-2 py-1 bg-[#EAF3F1] hover:bg-[#1C8C9E] hover:text-white rounded text-[#0B3B45] font-bold text-[10px] flex items-center justify-center gap-1 mx-auto"
+                    >
+                      <Receipt size={12} /> Print Receipt
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {activeReceiptSale && (
+        <ReceiptModal
+          sale={activeReceiptSale}
+          companyName={data.settings.companyName}
+          driversList={driversList}
+          onClose={() => setActiveReceiptSale(null)}
+        />
+      )}
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  REPORTS & DRIVER DASHBOARD MODULE                                      */
+/*  REPORTS & DRIVER DASHBOARD MODULE                                     */
 /* ---------------------------------------------------------------------- */
 function ReportsModule({ data, session }) {
   const isDriver = session.role === "driver";
@@ -1564,140 +1694,154 @@ function ReportsModule({ data, session }) {
     });
   }, [driversList, data.sales, isDriver, session.id]);
 
+  const handlePrintReport = () => {
+    window.print();
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <p className="font-display font-800 text-2xl text-[#0B3B45]">{isDriver ? "Driver Delivery Portal" : "Reports & Delivery Drivers"}</p>
-          <p className="text-sm text-[#5B6B68]">Delivery performance, truck tracking, and periodic revenue analytics.</p>
+          <p className="text-sm text-[#5B6B68]">Delivery performance, truck logs, and periodic revenue analytics.</p>
         </div>
 
-        {!isDriver && (
-          <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
-            <button
-              onClick={() => setActiveTab("drivers")}
-              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "drivers" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
-            >
-              Driver Dashboard
-            </button>
-            <button
-              onClick={() => setActiveTab("ledger")}
-              className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "ledger" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
-            >
-              Periodic Sales Ledger
-            </button>
+        <div className="flex gap-2">
+          <button onClick={handlePrintReport} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
+            <Printer size={14} /> Print / Export PDF Report
+          </button>
+          {!isDriver && (
+            <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
+              <button
+                onClick={() => setActiveTab("drivers")}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "drivers" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
+              >
+                Driver Dashboard
+              </button>
+              <button
+                onClick={() => setActiveTab("ledger")}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "ledger" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
+              >
+                Periodic Sales Ledger
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div id="printable-area" className="space-y-5">
+        {activeTab === "drivers" && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {driverStats.map((driver) => (
+                <div key={driver.id} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-[#EDEFEA] pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-[#0B3B45] flex items-center justify-center text-white">
+                        <Truck size={18} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-[#0B3B45] text-sm">{driver.name}</p>
+                        <p className="text-[11px] font-mono text-[#5B6B68]">Reg: {driver.truckNo || "N/A"}</p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 text-green-800">
+                      Active Truck
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
+                      <p className="text-gray-500 font-semibold text-[10px]">Today Dispatched</p>
+                      <p className="font-mono font-bold text-sm text-[#0B3B45]">{fmt(driver.todayBags, 0)} bags</p>
+                    </div>
+                    <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
+                      <p className="text-gray-500 font-semibold text-[10px]">Total Sold Volume</p>
+                      <p className="font-mono font-bold text-sm text-[#1C8C9E]">{fmt(driver.totalBags, 0)} bags</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#EAF3F1] p-3 rounded-xl border border-[#BFDCD6] flex justify-between items-center">
+                    <span className="text-xs font-semibold text-[#0B3B45]">Lifetime Revenue</span>
+                    <span className="font-mono font-extrabold text-sm text-[#2A6E4A]">{fmtGHS(driver.totalRevenue)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(activeTab === "ledger" && !isDriver) && (
+          <div className="space-y-5">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-bold text-[#0B3B45]">Filter Driver:</span>
+              <select value={filterDriver} onChange={(e) => setFilterDriver(e.target.value)} className="inp w-60">
+                <option value="all">All Delivery Truck Drivers</option>
+                {driversList.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatCard icon={Truck} label="Daily Sales" value={fmtGHS(metrics.daily)} accent="#1C8C9E" />
+              <StatCard icon={Calendar} label="Weekly Sales (7-Day)" value={fmtGHS(metrics.weekly)} accent="#2A6E4A" />
+              <StatCard icon={TrendingUp} label="Monthly Sales" value={fmtGHS(metrics.monthly)} accent="#E8A23D" />
+              <StatCard icon={Wallet} label="Annual Sales" value={fmtGHS(metrics.annual)} accent="#0B3B45" />
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+              <p className="font-bold text-[#0B3B45] mb-3">Sales Ledger by Truck Driver</p>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-[#F7F8F5] text-left">
+                    <th className="p-2">Date</th>
+                    <th className="p-2">Driver / Truck</th>
+                    <th className="p-2">Customer</th>
+                    <th className="p-2 text-right">Bags Sold</th>
+                    <th className="p-2 text-right">Total Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {salesFiltered.map((s) => {
+                    const drv = driversList.find((d) => d.id === s.driverId);
+                    return (
+                      <tr key={s.id} className="border-t">
+                        <td className="p-2 font-mono">{s.date}</td>
+                        <td className="p-2 font-semibold text-blue-900">{drv?.name || "Unassigned"}</td>
+                        <td className="p-2">{s.customer}</td>
+                        <td className="p-2 text-right font-mono">{s.bagsSold}</td>
+                        <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
-
-      {activeTab === "drivers" && (
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {driverStats.map((driver) => (
-              <div key={driver.id} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-[#EDEFEA] pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-[#0B3B45] flex items-center justify-center text-white">
-                      <Truck size={18} />
-                    </div>
-                    <div>
-                      <p className="font-bold text-[#0B3B45] text-sm">{driver.name}</p>
-                      <p className="text-[11px] font-mono text-[#5B6B68]">Reg: {driver.truckNo || "N/A"}</p>
-                    </div>
-                  </div>
-                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 text-green-800">
-                    Active Truck
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
-                    <p className="text-gray-500 font-semibold text-[10px]">Today Dispatched</p>
-                    <p className="font-mono font-bold text-sm text-[#0B3B45]">{fmt(driver.todayBags, 0)} bags</p>
-                  </div>
-                  <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
-                    <p className="text-gray-500 font-semibold text-[10px]">Total Sold Volume</p>
-                    <p className="font-mono font-bold text-sm text-[#1C8C9E]">{fmt(driver.totalBags, 0)} bags</p>
-                  </div>
-                </div>
-
-                <div className="bg-[#EAF3F1] p-3 rounded-xl border border-[#BFDCD6] flex justify-between items-center">
-                  <span className="text-xs font-semibold text-[#0B3B45]">Lifetime Revenue</span>
-                  <span className="font-mono font-extrabold text-sm text-[#2A6E4A]">{fmtGHS(driver.totalRevenue)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {(activeTab === "ledger" && !isDriver) && (
-        <div className="space-y-5">
-          <div className="flex justify-between items-center">
-            <span className="text-xs font-bold text-[#0B3B45]">Filter Driver:</span>
-            <select value={filterDriver} onChange={(e) => setFilterDriver(e.target.value)} className="inp w-60">
-              <option value="all">All Delivery Truck Drivers</option>
-              {driversList.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard icon={Truck} label="Daily Sales" value={fmtGHS(metrics.daily)} accent="#1C8C9E" />
-            <StatCard icon={Calendar} label="Weekly Sales (7-Day)" value={fmtGHS(metrics.weekly)} accent="#2A6E4A" />
-            <StatCard icon={TrendingUp} label="Monthly Sales" value={fmtGHS(metrics.monthly)} accent="#E8A23D" />
-            <StatCard icon={Wallet} label="Annual Sales" value={fmtGHS(metrics.annual)} accent="#0B3B45" />
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-            <p className="font-bold text-[#0B3B45] mb-3">Sales Ledger by Truck Driver</p>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-[#F7F8F5] text-left">
-                  <th className="p-2">Date</th>
-                  <th className="p-2">Driver / Truck</th>
-                  <th className="p-2">Customer</th>
-                  <th className="p-2 text-right">Bags Sold</th>
-                  <th className="p-2 text-right">Total Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {salesFiltered.map((s) => {
-                  const drv = driversList.find((d) => d.id === s.driverId);
-                  return (
-                    <tr key={s.id} className="border-t">
-                      <td className="p-2 font-mono">{s.date}</td>
-                      <td className="p-2 font-semibold text-blue-900">{drv?.name || "Unassigned"}</td>
-                      <td className="p-2">{s.customer}</td>
-                      <td className="p-2 text-right font-mono">{s.bagsSold}</td>
-                      <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  ADMIN USER MANAGEMENT, DRIVERS MANAGEMENT & PRICE SETUP               */
+/*  ADMIN MANAGEMENT MODULE & BUSINESS DETAILS REGISTRATION               */
 /* ---------------------------------------------------------------------- */
 function AdminManagementModule({ data, mutate, showToast }) {
   const [selectedUserId, setSelectedUserId] = useState(data.users[0]?.id || "");
   const [newPassword, setNewPassword] = useState("");
   const [unitPrice, setUnitPrice] = useState(data.settings.pricePerBag || 5.0);
 
-  // New Driver Form State
+  const [bizName, setBizName] = useState(data.businessDetails?.name || "");
+  const [bizPhone, setBizPhone] = useState(data.businessDetails?.phone || "");
+  const [bizAddress, setBizAddress] = useState(data.businessDetails?.address || "");
+  const [bizTin, setBizTin] = useState(data.businessDetails?.tin || "");
+
   const [driverName, setDriverName] = useState("");
   const [truckNo, setTruckNo] = useState("");
   const [driverPassword, setDriverPassword] = useState("");
 
-  // Edit Driver Form State
   const drivers = useMemo(() => data.users.filter((u) => u.role === "driver"), [data.users]);
   const [editDriverId, setEditDriverId] = useState(drivers[0]?.id || "");
   const [editDriverName, setEditDriverName] = useState("");
@@ -1713,9 +1857,29 @@ function AdminManagementModule({ data, mutate, showToast }) {
     }
   }, [editDriverId, drivers]);
 
+  const handleSaveBusinessDetails = (e) => {
+    e.preventDefault();
+    mutate((prev) => ({
+      ...prev,
+      businessDetails: {
+        name: bizName,
+        phone: bizPhone,
+        address: bizAddress,
+        tin: bizTin,
+        isRegistered: true,
+      },
+      settings: {
+        ...prev.settings,
+        companyName: bizName || prev.settings.companyName,
+      },
+    }), "Updated Business Details", bizName);
+
+    showToast("Business Details Updated!");
+  };
+
   const handleResetPassword = (e) => {
     e.preventDefault();
-    if (!newPassword) return showToast("Password cannot be empty!", "warn");
+    if (!newPassword || newPassword.length < 6) return showToast("Password must be at least 6 characters long!", "warn");
 
     mutate((prev) => ({
       ...prev,
@@ -1741,6 +1905,7 @@ function AdminManagementModule({ data, mutate, showToast }) {
   const handleAddDriver = (e) => {
     e.preventDefault();
     if (!driverName || !truckNo || !driverPassword) return showToast("Fill all driver fields", "warn");
+    if (driverPassword.length < 6) return showToast("Driver password must be at least 6 characters!", "warn");
 
     const newDriverUser = {
       id: uid(),
@@ -1779,11 +1944,39 @@ function AdminManagementModule({ data, mutate, showToast }) {
     <div className="space-y-6">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin Settings & Security Controls</p>
-        <p className="text-sm text-[#5B6B68]">Manage role passwords, global selling price, and delivery drivers.</p>
+        <p className="text-sm text-[#5B6B68]">Manage business details, role passwords, global selling price, and delivery drivers.</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        {/* PRICE SETUP */}
+        {/* BUSINESS DETAILS EDIT FORM */}
+        <form onSubmit={handleSaveBusinessDetails} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex justify-between items-center">
+            <p className="font-bold text-[#0B3B45]">Business Details & Branding</p>
+            {data.businessDetails?.isRegistered ? (
+              <span className="text-[10px] bg-green-100 text-green-800 font-bold px-2 py-0.5 rounded">Registered</span>
+            ) : (
+              <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded">Pending Setup</span>
+            )}
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business / Company Name</label>
+            <input value={bizName} onChange={(e) => setBizName(e.target.value)} placeholder="e.g. Ghana Pure Water Ltd" className="inp" required />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business Phone Number</label>
+            <input value={bizPhone} onChange={(e) => setBizPhone(e.target.value)} placeholder="e.g. +233 24 123 4567" className="inp" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business Address</label>
+            <input value={bizAddress} onChange={(e) => setBizAddress(e.target.value)} placeholder="e.g. Plot 12 Industrial Area, Accra" className="inp" />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Tax Identification Number (TIN)</label>
+            <input value={bizTin} onChange={(e) => setBizTin(e.target.value)} placeholder="e.g. C0001234567" className="inp" />
+          </div>
+          <button type="submit" className="btn-primary w-full"><Pencil size={15} /> Save Business Profile</button>
+        </form>
+
         <form onSubmit={handleUpdatePrice} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
           <p className="font-bold text-[#0B3B45]">Standard Selling Price Setup</p>
           <div>
@@ -1793,7 +1986,6 @@ function AdminManagementModule({ data, mutate, showToast }) {
           <button type="submit" className="btn-primary w-full">Save Selling Price</button>
         </form>
 
-        {/* RESET USER PASSWORDS */}
         <form onSubmit={handleResetPassword} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
           <p className="font-bold text-[#0B3B45]">System Account Password Reset</p>
           <div>
@@ -1805,13 +1997,12 @@ function AdminManagementModule({ data, mutate, showToast }) {
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-500">New Password</label>
+            <label className="text-xs font-semibold text-gray-500">New Password (Min 6 chars)</label>
             <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="inp" required />
           </div>
           <button type="submit" className="btn-primary w-full">Set Password</button>
         </form>
 
-        {/* REGISTER TRUCK DRIVER */}
         <form onSubmit={handleAddDriver} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
           <p className="font-bold text-[#0B3B45]">Register Driver Account</p>
           <div>
@@ -1829,28 +2020,29 @@ function AdminManagementModule({ data, mutate, showToast }) {
           <button type="submit" className="btn-primary w-full"><Plus size={15} /> Add Driver</button>
         </form>
 
-        {/* EDIT DRIVER DETAILS */}
-        <form onSubmit={handleEditDriver} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+        <form onSubmit={handleEditDriver} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3 lg:col-span-2">
           <p className="font-bold text-[#0B3B45]">Edit Driver Details</p>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Select Driver</label>
-            <select value={editDriverId} onChange={(e) => setEditDriverId(e.target.value)} className="inp" required>
-              {drivers.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Name</label>
-            <input value={editDriverName} onChange={(e) => setEditDriverName(e.target.value)} className="inp" required />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Truck Reg. Number</label>
-            <input value={editTruckNo} onChange={(e) => setEditTruckNo(e.target.value)} className="inp" required />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Password</label>
-            <input type="password" value={editDriverPassword} onChange={(e) => setEditDriverPassword(e.target.value)} className="inp" required />
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Select Driver</label>
+              <select value={editDriverId} onChange={(e) => setEditDriverId(e.target.value)} className="inp" required>
+                {drivers.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Name</label>
+              <input value={editDriverName} onChange={(e) => setEditDriverName(e.target.value)} className="inp" required />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Truck Reg. Number</label>
+              <input value={editTruckNo} onChange={(e) => setEditTruckNo(e.target.value)} className="inp" required />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Password</label>
+              <input type="password" value={editDriverPassword} onChange={(e) => setEditDriverPassword(e.target.value)} className="inp" required />
+            </div>
           </div>
           <button type="submit" className="btn-primary w-full"><Pencil size={15} /> Update Driver Details</button>
         </form>
@@ -1860,13 +2052,23 @@ function AdminManagementModule({ data, mutate, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  AUDIT LOG & TOAST COMPONENTS                                           */
+/*  AUDIT LOG & TOAST COMPONENTS                                          */
 /* ---------------------------------------------------------------------- */
 function AuditLog({ data }) {
+  const handlePrintAudit = () => {
+    window.print();
+  };
+
   return (
-    <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA]">
-      <p className="font-bold text-[#0B3B45] mb-3">System Audit Trail</p>
-      <div className="max-h-96 overflow-y-auto">
+    <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+      <div className="flex justify-between items-center">
+        <p className="font-bold text-[#0B3B45]">System Security Audit Trail</p>
+        <button onClick={handlePrintAudit} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
+          <Printer size={14} /> Print Audit Trail PDF
+        </button>
+      </div>
+
+      <div id="printable-area" className="max-h-96 overflow-y-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">

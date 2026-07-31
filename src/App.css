@@ -26,6 +26,7 @@ body {
   background: #f2f4ef;
   color: #16211f;
   font-family: 'IBM Plex Sans', sans-serif;
+  overflow-x: hidden;
 }
 
 button,
@@ -217,9 +218,9 @@ img {
 .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
-body {
-  overflow-x: hidden;
-}
+.translate-x-0 { transform: translateX(0) !important; }
+.-translate-x-full { transform: translateX(-100%) !important; }
+.translate-x-full { transform: translateX(100%) !important; }
 
 .pw-sidebar {
   background-color: #0b3b45;
@@ -234,7 +235,7 @@ body {
   z-index: 40;
   padding: 1rem 0.75rem;
   min-height: 100vh;
-  transform: translateX(-110%);
+  transform: translateX(-100%);
   transition: transform 0.2s ease;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
 }
@@ -282,8 +283,8 @@ body {
 }
 
 .pw-sidebar .pw-nav-item-active {
-  background-color: #1c8c9e !important;
-  color: #0b3b45 !important;
+  background-color: #81e5f5 !important;
+  color: #fbfeff !important;
   font-weight: 700;
 }
 
@@ -292,6 +293,7 @@ body {
   .sm\:hidden { display: none; }
   .sm\:static { position: static; }
   .sm\:flex-row { flex-direction: row; }
+  .sm\:translate-x-0 { transform: translateX(0) !important; }
   .sm\:items-center { align-items: center; }
   .sm\:items-end { align-items: flex-end; }
   .sm\:items-start { align-items: flex-start; }
@@ -327,6 +329,7 @@ body {
 .bg-\[\#0B3B45\] { background-color: #0b3b45; }
 .bg-\[\#F2F4EF\] { background-color: #f2f4ef; }
 .bg-\[\#FFFFFF\] { background-color: #ffffff; }
+.bg-black\/50 { background-color: rgba(0, 0, 0, 0.5); }
 .bg-\[\#1C8C9E\] { background-color: #1c8c9e; }
 .bg-\[\#EAF3F1\] { background-color: #eaf3f1; }
 .bg-\[\#E8A23D\] { background-color: #e8a23d; }
@@ -366,3 +369,186 @@ body {
 .hover\:border-\[\#1C8C9E\]:hover { border-color: #1c8c9e; }
 .hover\:bg-\[\#EAF3F1\]:hover { background-color: #eaf3f1; }
 .hover\:text-\[\#0B3B45\]:hover { color: #0b3b45; }
+
+
+/* ==========================================================================
+   1. Application Shell Layout
+   ========================================================================== */
+.app-container {
+  display: flex;
+  min-height: 100vh;
+  width: 100vw;
+  background-color: var(--bg-main);
+}
+
+/* Sidebar Navigation */
+.app-sidebar {
+  width: 260px;
+  background-color: var(--bg-sidebar);
+  color: var(--text-inverse);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: transform var(--transition-normal);
+}
+
+/* Main Content Wrapper */
+.app-viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* Top Header / Navigation Bar */
+.app-header {
+  height: 64px;
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* Main Content Area */
+.app-content {
+  flex: 1;
+  padding: 1.5rem;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ==========================================================================
+   2. Components & UI Elements
+   ========================================================================== */
+
+/* Cards & Containers */
+
+.card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast);
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  transition: background-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn-primary {
+  background-color: var(--primary);
+  color: var(--text-inverse);
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+}
+
+.btn-secondary {
+  background-color: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+}
+
+.btn-secondary:hover {
+  background-color: var(--border-color);
+}
+
+/* Badges & Pills */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-success {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.badge-warning {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.badge-danger {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+/* Responsive Grid Helper */
+.grid-responsive {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+/* ==========================================================================
+   3. Mobile Responsiveness
+   ========================================================================== */
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  .app-sidebar {
+    width: 100%;
+    height: auto;
+  }
+
+  .app-content {
+    padding: 1rem;
+  }
+}
+
+#myStyle {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast);
+}
+
+#notify {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast);
+}
+
+#bell {
+  background-color: rgb(243, 241, 241);
+  border: 1px solid rgb(182, 182, 182) ;
+}
