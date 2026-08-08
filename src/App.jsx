@@ -3,12 +3,36 @@ import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
 
+import { createClient } from '@supabase/supabase-js'
 import {
   Droplets, Warehouse, PackageOpen, Factory, Wallet, FileBarChart, ShieldCheck,
   LogOut, Plus, ChevronRight, AlertTriangle, CheckCircle2, Wifi, WifiOff,
   Users, Settings2, Scale, TrendingUp, TrendingDown, ClipboardList, X, Lock,
-  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building
+  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building, DollarSign, RotateCcw, Trash2
 } from "lucide-react";
+
+/* ---------------------------------------------------------------------- */
+/*  SUPABASE CLIENT & SYNC ENGINE                                          */
+/* ---------------------------------------------------------------------- */
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+async function syncToSupabase(data) {
+  if (!supabase || !navigator.onLine) return;
+  try {
+    await supabase.from("pureledger_store").upsert({
+      id: "main_data",
+      data,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Supabase sync failed:", err);
+  }
+}
 
 /* ---------------------------------------------------------------------- */
 /*  PWA SERVICE WORKER REGISTRATION                                        */
@@ -53,6 +77,7 @@ const emptyData = {
   sales: [],
   debtPayments: [],
   expenses: [],
+  adminExpenses: [],
   bankDeposits: [],
   notifications: [],
   settings: {
@@ -66,9 +91,33 @@ const emptyData = {
 };
 
 async function loadData() {
+  if (supabase && navigator.onLine) {
+    try {
+      const { data: remote, error } = await supabase.from("pureledger_store").select("data").eq("id", "main_data").single();
+      if (!error && remote && remote.data) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.data));
+        return {
+          ...emptyData,
+          ...remote.data,
+          settings: { ...emptyData.settings, ...(remote.data.settings || {}) },
+          businessDetails: { ...emptyData.businessDetails, ...(remote.data.businessDetails || {}) }
+        };
+      }
+    } catch (e) {
+      console.warn("Supabase load failed, falling back to local storage", e);
+    }
+  }
+
   try {
     const res = localStorage.getItem(STORAGE_KEY);
-    return res ? { ...emptyData, ...JSON.parse(res), settings: { ...emptyData.settings, ...(JSON.parse(res).settings || {}) } } : emptyData;
+    if (!res) return emptyData;
+    const parsed = JSON.parse(res);
+    return {
+      ...emptyData,
+      ...parsed,
+      settings: { ...emptyData.settings, ...(parsed.settings || {}) },
+      businessDetails: { ...emptyData.businessDetails, ...(parsed.businessDetails || {}) }
+    };
   } catch {
     return emptyData;
   }
@@ -77,6 +126,7 @@ async function loadData() {
 async function saveData(data) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    syncToSupabase(data);
   } catch (e) {
     console.error("Storage save failed", e);
   }
@@ -91,11 +141,24 @@ const fmt = (n, d = 1) => Number(n || 0).toLocaleString("en-GH", { maximumFracti
 const fmtGHS = (n) => `GH₵ ${fmt(n, 2)}`;
 
 const ROLES = {
-  owner: { label: "Business Owner (Admin)", desc: "Full control · Financials · Price setup · Transfers", icon: ShieldCheck },
+  owner: { label: "Business Owner", desc: "Full control · Financials · Price setup · Transfers", icon: ShieldCheck },
   manager: { label: "Manager", desc: "Operations · Production · Stock Acceptance", icon: Users },
   cashier: { label: "Cashier", desc: "Driver & Customer Sales Entry", icon: Wallet },
   driver: { label: "Delivery Driver", desc: "Delivery Operations", icon: Truck },
 };
+
+/* ---------------------------------------------------------------------- */
+/*  TOAST COMPONENT                                                        */
+/* ---------------------------------------------------------------------- */
+function Toast({ msg, tone = "ok" }) {
+  const isWarn = tone === "warn";
+  return (
+    <div className={`fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-2xl text-xs font-bold text-white transition-all ${isWarn ? "bg-[#C4472F]" : "bg-[#2A6E4A]"}`}>
+      {isWarn ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+      <span>{msg}</span>
+    </div>
+  );
+}
 
 /* ---------------------------------------------------------------------- */
 /*  MAIN ENTRY APP                                                         */
@@ -118,7 +181,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const on = () => setOnline(true);
+    const on = () => {
+      setOnline(true);
+      if (loaded) syncToSupabase(data);
+    };
     const off = () => setOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
@@ -126,7 +192,7 @@ export default function App() {
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
-  }, []);
+  }, [loaded, data]);
 
   const showToast = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone });
@@ -141,8 +207,8 @@ export default function App() {
             ...draft,
             auditLog: [
               { id: uid(), ts: new Date().toISOString(), user: session.name, role: session.role, action: auditAction, detail: auditDetail },
-              ...draft.auditLog,
-            ].slice(0, 500),
+              ...(draft.auditLog || []),
+            ].slice(0, 999),
           }
         : draft;
       saveData(withAudit);
@@ -155,10 +221,24 @@ export default function App() {
     setPage(s.role === "cashier" ? "sales" : s.role === "driver" ? "reports" : "dashboard");
     showToast(`Welcome, ${s.name}`);
 
-    // Prompt Admin for business registration if not yet registered
     if (s.role === "owner" && !data.businessDetails?.isRegistered) {
       setShowBusinessModal(true);
     }
+  };
+
+  const handleResetAdminPassword = (emailInput, newPass) => {
+    const adminUser = (data.users || []).find(
+      (u) => u.email && u.email.toLowerCase() === emailInput.trim().toLowerCase() && u.role === "owner"
+    );
+
+    if (!adminUser) return false;
+
+    mutate((prev) => ({
+      ...prev,
+      users: (prev.users || []).map((u) => u.id === adminUser.id ? { ...u, password: newPass } : u),
+    }), "Admin Password Reset", adminUser.email);
+
+    return true;
   };
 
   const handleSaveBusinessDetails = (details) => {
@@ -192,31 +272,16 @@ export default function App() {
   if (!session) {
     return (
       <LoginScreen
-        users={data.users}
+        users={data.users || []}
         onLogin={handleLogin}
-        onResetAdminPassword={(email, newPass) => {
-          let updated = false;
-          setData((prev) => {
-            const nextUsers = prev.users.map((u) => {
-              if (u.role === "owner" && u.email === email) {
-                updated = true;
-                return { ...u, password: newPass };
-              }
-              return u;
-            });
-            const next = { ...prev, users: nextUsers };
-            saveData(next);
-            return next;
-          });
-          return updated;
-        }}
+        onResetAdminPassword={handleResetAdminPassword}
       />
     );
   }
 
   return (
     <div className="min-h-screen bg-[#F2F4EF] text-[#16211F] font-body">
-      <style>{CSS_TOOLKIT}</style>
+      <style dangerouslySetInnerHTML={{ __html: CSS_TOOLKIT }} />
       <div className="flex">
         <Sidebar
           page={page}
@@ -230,7 +295,7 @@ export default function App() {
           <TopBar session={session} online={online} onMenuClick={() => setMobileNavOpen(true)} onLogout={() => setSession(null)} data={data} mutate={mutate} />
           <main className="p-4 sm:p-6 max-w-6xl mx-auto">
             {page === "dashboard" && (session.role === "owner" || session.role === "manager") && (
-              <Dashboard data={data} session={session} />
+              <Dashboard data={data} mutate={mutate} session={session} showToast={showToast} />
             )}
             {page === "warehouse" && (session.role === "owner" || session.role === "manager") && (
               <WarehouseModule data={data} mutate={mutate} session={session} showToast={showToast} />
@@ -250,7 +315,7 @@ export default function App() {
             {page === "admin" && session.role === "owner" && (
               <AdminManagementModule data={data} mutate={mutate} showToast={showToast} />
             )}
-            {page === "audit" && session.role === "owner" && <AuditLog data={data} />}
+            {page === "audit" && session.role === "owner" && <AuditLog data={data} mutate={mutate} showToast={showToast} />}
           </main>
         </div>
       </div>
@@ -290,20 +355,21 @@ const CSS_TOOLKIT = `
 .pw-sidebar, .pw-sidebar * { color:#F2F4EF; }
 .pw-sidebar .pw-nav-item { color:#B9CFCE; }
 .pw-sidebar .pw-nav-item:hover { background-color:#12505C; }
-.pw-sidebar .pw-nav-item-active { background-color:#1C8C9E !important; color:#0B3B45 !important; font-weight:600; }
+.pw-sidebar .pw-nav-item-active { background-color:#1C8C9E !important; color:#FFFFFF !important; font-weight:600; }
 
 @media print {
   body * { visibility: hidden; }
   #printable-area, #printable-area *, #printable-receipt, #printable-receipt * { visibility: visible; }
   #printable-area { position: absolute; left: 0; top: 0; width: 100%; }
   #printable-receipt { position: absolute; left: 0; top: 0; width: 100%; max-width: 320px; margin: 0 auto; padding: 10px; background: white; color: black; }
+  .no-print { display: none !important; }
 }
 `;
 
 /* ---------------------------------------------------------------------- */
 /*  LOGIN SCREEN                                                           */
 /* ---------------------------------------------------------------------- */
-function LoginScreen({ users, onLogin, onResetAdminPassword }) {
+function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
   const [view, setView] = useState("login");
   const [selectedUser, setSelectedUser] = useState(users[0] || null);
   const [password, setPassword] = useState("");
@@ -314,7 +380,13 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
   const [resetEmail, setResetEmail] = useState("");
   const [resetPassword, setResetPassword] = useState("");
 
-  const handleLogin = (e) => {
+  useEffect(() => {
+    if (users.length > 0 && !selectedUser) {
+      setSelectedUser(users[0]);
+    }
+  }, [users, selectedUser]);
+
+  const handleLoginSubmit = (e) => {
     e.preventDefault();
     if (!selectedUser) return;
 
@@ -323,8 +395,8 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
       return;
     }
 
-    if (fullNameInput && fullNameInput.trim().toLowerCase() !== selectedUser.name.trim().toLowerCase()) {
-      setError("Full Name mismatch! Please type exact full name.");
+    if (!fullNameInput || fullNameInput.trim().toLowerCase() !== selectedUser.name.trim().toLowerCase()) {
+      setError("Full Name mismatch! Please type the exact full name for this role.");
       return;
     }
 
@@ -361,30 +433,30 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
             <Droplets size={20} className="text-[#0B3B45]" />
           </div>
           <div className="text-left">
-            <p className="font-display font-800 text-[#0B3B45] text-xl leading-none">PureLedger</p>
+            <p className="font-display font-800 text-[#0B3B45] text-xl leading-none">Mattbees Water Services</p>
             <p className="font-mono text-[10px] text-[#5B6B68] uppercase tracking-widest mt-0.5">Offline-First Sachet ERP</p>
           </div>
         </div>
 
         {view === "login" && (
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLoginSubmit} className="space-y-4">
             {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
-            
+
             <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Select User / Driver Account</label>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Select Role Account</label>
               <select
                 value={selectedUser?.id || ""}
                 onChange={(e) => {
                   const u = users.find((x) => x.id === e.target.value);
                   setSelectedUser(u);
-                  setFullNameInput(u ? u.name : "");
+                  setFullNameInput("");
                   setError("");
                 }}
                 className="inp mt-1"
               >
                 {users.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.name} ({ROLES[u.role]?.label || u.role})
+                    {ROLES[u.role]?.label || u.role} ({u.name})
                   </option>
                 ))}
               </select>
@@ -394,9 +466,9 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
               <label className="text-xs font-semibold text-[#5B6B68] uppercase">Verify Full Name</label>
               <input
                 type="text"
-                value={fullNameInput || (selectedUser ? selectedUser.name : "")}
+                value={fullNameInput}
                 onChange={(e) => { setFullNameInput(e.target.value); setError(""); }}
-                placeholder="Enter exact full name"
+                placeholder="Type exact full name assigned to role"
                 className="inp mt-1"
                 required
               />
@@ -434,6 +506,7 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
 
         {view === "forgot" && (
           <form onSubmit={handleForgot} className="space-y-3">
+            {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
             <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
               <p className="text-xs font-bold text-[#0B3B45]">Admin Password Recovery</p>
               <p className="text-[11px] text-[#5B6B68]">Authenticate using registered Admin email address to set a new password.</p>
@@ -445,7 +518,7 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
                 type="email"
                 value={resetEmail}
                 onChange={(e) => { setResetEmail(e.target.value); setError(""); }}
-                placeholder="admin@company.com"
+                placeholder="admin@pureledger.com"
                 className="inp mt-1"
                 required
               />
@@ -479,7 +552,7 @@ function LoginScreen({ users, onLogin, onResetAdminPassword }) {
           </form>
         )}
 
-        <p className="text-center text-[11px] font-mono text-[#5B6B68] mt-4">PWA ACTIVE · LOCALSTORAGE OFFLINE SAFE</p>
+        <p className="text-center text-[11px] font-mono text-[#5B6B68] mt-4">PWA ACTIVE · SUPABASE SYNC ENABLED</p>
       </div>
     </div>
   );
@@ -501,7 +574,7 @@ function BusinessDetailsModal({ initialDetails, onSave, onSkip }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <div id="myStyle" className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
         <div className="flex items-center gap-2 border-b pb-3">
           <Building className="text-[#0B3B45]" size={22} />
           <div>
@@ -568,7 +641,7 @@ function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
             <div className="w-8 h-8 rounded-lg bg-[#1C8C9E] flex items-center justify-center">
               <Droplets size={16} className="text-[#0B3B45]" />
             </div>
-            <p className="font-display font-800 text-[15px] text-[#F2F4EF]">PureLedger</p>
+            <p className="font-display font-800 text-[15px] text-[#F2F4EF]">Mattbees Water Services</p>
           </div>
           <button onClick={onClose} className="sm:hidden p-1 text-[#B9CFCE]"><X size={18} /></button>
         </div>
@@ -596,6 +669,17 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
   const Icon = ROLES[session.role]?.icon || ShieldCheck;
   const [notifOpen, setNotifOpen] = useState(false);
   const notifications = data.notifications || [];
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
+  const handleOpenNotifications = () => {
+    if (!notifOpen && unreadCount > 0) {
+      mutate((prev) => ({
+        ...prev,
+        notifications: (prev.notifications || []).map((n) => ({ ...n, read: true })),
+      }), "Read Notifications", "Marked all system notifications as read");
+    }
+    setNotifOpen(!notifOpen);
+  };
 
   return (
     <div className="sticky top-0 z-20 bg-[#F2F4EF] border-b border-[#DDE3DA] px-4 sm:px-6 py-3 flex items-center justify-between">
@@ -605,7 +689,7 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
         </button>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold ${online ? "bg-[#DCEEE4] text-[#2A6E4A]" : "bg-[#F5E3D9] text-[#A85A2A]"}`}>
           {online ? <Wifi size={12} /> : <WifiOff size={12} />}
-          <span>{online ? "PWA ONLINE" : "OFFLINE READY"}</span>
+          <span>{online ? "ONLINE SYNCED" : "OFFLINE READY"}</span>
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -613,31 +697,34 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
           <p className="text-sm font-semibold">{session.name}</p>
           <p className="text-[11px] text-[#5B6B68]">{ROLES[session.role]?.label || session.role}</p>
         </div>
-        <div className="w-8 h-8 rounded-full bg-[#0B3B45] flex items-center justify-center text-white" id="bell">
+        <div className="w-8 h-8 rounded-full bg-[#0B3B45] flex items-center justify-center text-white">
           <Icon size={14} />
         </div>
         <div className="relative">
-          <button onClick={() => setNotifOpen(!notifOpen)} className="relative w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#0B3B45]">
+          <button onClick={handleOpenNotifications} className="relative w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#0B3B45]">
             <Bell size={15} />
-            {notifications.length > 0 && (
+            {unreadCount > 0 && (
               <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold bg-[#C4472F] text-white flex items-center justify-center">
-                {notifications.length}
+                {unreadCount}
               </span>
             )}
           </button>
           {notifOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-[#DDE3DA] shadow-xl z-50 p-3" id="notify">
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-[#DDE3DA] shadow-xl z-50 p-3">
               <div className="flex items-center justify-between pb-2 border-b border-[#EDEFEA]">
                 <p className="font-bold text-xs text-[#0B3B45]">System Notifications</p>
                 <button onClick={() => mutate((prev) => ({ ...prev, notifications: [] }), "Cleared Notifications", "")} className="text-[10px] text-[#C4472F]">Clear All</button>
               </div>
               <div className="max-h-60 overflow-y-auto space-y-2 mt-2">
-                {notifications.length === 0 ? <p className="text-xs text-gray-400 text-center py-4">No unread notifications</p> : (
+                {notifications.length === 0 ? <p className="text-xs text-gray-400 text-center py-4">No notifications</p> : (
                   notifications.map((n) => (
-                    <div key={n.id} className="p-2 bg-[#F7F8F5] rounded text-xs border border-[#EDEFEA]">
-                      <p className="font-semibold text-[#0B3B45]">{n.title}</p>
-                      <p className="text-gray-600">{n.msg}</p>
-                      <span className="text-[9px] text-gray-400 font-mono">{n.ts}</span>
+                    <div key={n.id} className="p-2 bg-[#F7F8F5] rounded text-xs border border-[#EDEFEA] relative">
+                      <div className="flex justify-between items-center">
+                        <p className="font-semibold text-[#0B3B45]">{n.title}</p>
+                        <span className="text-[9px] text-green-700 font-bold bg-green-100 px-1.5 py-0.5 rounded">Read</span>
+                      </div>
+                      <p className="text-gray-600 mt-1">{n.msg}</p>
+                      <span className="text-[9px] text-gray-400 font-mono mt-1 block">{n.ts}</span>
                     </div>
                   ))
                 )}
@@ -657,8 +744,8 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
 /*  BUSINESS LOGIC COMPUTATION HELPERS                                      */
 /* ---------------------------------------------------------------------- */
 function computeFinishedGoods(data) {
-  const produced = data.productionRuns.reduce((s, r) => s + r.netAvailableBags, 0);
-  const sold = data.sales.reduce((s, r) => s + r.bagsSold, 0);
+  const produced = (data.productionRuns || []).reduce((s, r) => s + (r.netAvailableBags || 0), 0);
+  const sold = (data.sales || []).reduce((s, r) => s + (r.bagsSold || 0), 0);
   return {
     totalProduced: produced,
     totalSold: sold,
@@ -667,40 +754,209 @@ function computeFinishedGoods(data) {
 }
 
 function computeManagerAcceptedRolls(data) {
-  const accepted = data.issuance.filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + i.weightKg, 0);
-  const used = data.productionRuns.reduce((s, p) => s + p.weightUsedKg, 0);
+  const accepted = (data.issuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.weightKg || 0), 0);
+  const used = (data.productionRuns || []).reduce((s, p) => s + (p.weightUsedKg || 0), 0);
   return Math.max(0, accepted - used);
 }
 
 function computeManagerAcceptedBags(data) {
-  const accepted = data.bagIssuance.filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + i.qty, 0);
-  const used = data.bagUsage.reduce((s, u) => s + u.qty, 0);
+  const accepted = (data.bagIssuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.qty || 0), 0);
+  const used = (data.bagUsage || []).reduce((s, u) => s + (u.qty || 0), 0);
   return Math.max(0, accepted - used);
 }
 
 function computeCashBalance(data) {
-  const cashSales = data.sales.filter((s) => s.method === "cash").reduce((s, r) => s + r.amountPaid, 0);
-  const debtCash = data.debtPayments.filter((p) => p.method === "cash").reduce((s, r) => s + r.amount, 0);
-  const expenses = data.expenses.reduce((s, e) => s + e.amount, 0);
-  const deposits = data.bankDeposits.reduce((s, d) => s + d.amount, 0);
-  return cashSales + debtCash - expenses - deposits;
+  const cashSales = (data.sales || []).filter((s) => s.method === "cash").reduce((s, r) => s + (r.amountPaid || 0), 0);
+  const debtCash = (data.debtPayments || []).filter((p) => p.method === "cash").reduce((s, r) => s + (r.amount || 0), 0);
+  const managerExpenses = (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+  const adminExpenses = (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+  const deposits = (data.bankDeposits || []).reduce((s, d) => s + (d.amount || 0), 0);
+  return cashSales + debtCash - managerExpenses - adminExpenses - deposits;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  AUDIT LOG COMPONENT                                                   */
+/* ---------------------------------------------------------------------- */
+function AuditLog({ data, mutate, showToast }) {
+  const logs = data.auditLog || [];
+
+  const handleResetAuditLog = () => {
+    if (window.confirm("Are you sure you want to reset and clear the entire Audit Log?")) {
+      mutate((prev) => ({
+        ...prev,
+        auditLog: [],
+      }), "Reset Audit Log", "Cleared all system audit log entries");
+      showToast("Audit log cleared successfully!");
+    }
+  };
+
+  const handlePrintAuditLog = () => {
+    window.print();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <p className="font-display font-800 text-2xl text-[#0B3B45]">System Audit Trail</p>
+          <p className="text-sm text-[#5B6B68]">Track all operational actions, data updates, and security events.</p>
+        </div>
+
+        <div className="flex gap-2 no-print">
+          <button onClick={handlePrintAuditLog} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
+            <Printer size={14} /> Print Audit Log
+          </button>
+          <button onClick={handleResetAuditLog} className="btn-primary py-1.5 px-3 text-xs bg-[#C4472F] hover:bg-red-800">
+            <RotateCcw size={14} /> Reset Audit Log
+          </button>
+        </div>
+      </div>
+
+      <div id="printable-area" className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-[#F7F8F5] text-left">
+              <th className="p-2">Timestamp</th>
+              <th className="p-2">User</th>
+              <th className="p-2">Role</th>
+              <th className="p-2">Action</th>
+              <th className="p-2">Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="p-4 text-center text-gray-400">No audit logs recorded yet.</td>
+              </tr>
+            ) : (
+              logs.map((log) => (
+                <tr key={log.id} className="border-t">
+                  <td className="p-2 font-mono text-gray-500">{new Date(log.ts).toLocaleString()}</td>
+                  <td className="p-2 font-semibold text-[#0B3B45]">{log.user}</td>
+                  <td className="p-2 uppercase text-[10px] font-mono">{log.role}</td>
+                  <td className="p-2 font-bold text-blue-900">{log.action}</td>
+                  <td className="p-2 text-gray-600">{log.detail}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 /* ---------------------------------------------------------------------- */
 /*  DASHBOARD MODULE                                                        */
 /* ---------------------------------------------------------------------- */
-function Dashboard({ data, session }) {
+function Dashboard({ data, mutate, session, showToast }) {
   const isOwner = session.role === "owner";
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
   const managerRollsKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
   const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
   const cashOnHand = useMemo(() => computeCashBalance(data), [data]);
 
+  const managersList = useMemo(() => (data.users || []).filter((u) => u.role === "manager"), [data.users]);
+
+  const [expenseDesc, setExpenseDesc] = useState("");
+  const [expenseAmt, setExpenseAmt] = useState("");
+
+  const [adminExpenseDesc, setAdminExpenseDesc] = useState("");
+  const [adminExpenseAmt, setAdminExpenseAmt] = useState("");
+
+  const handleLogExpense = (e) => {
+    e.preventDefault();
+    if (Number(expenseAmt) <= 0) return showToast("Enter a positive expense amount!", "warn");
+
+    mutate((prev) => ({
+      ...prev,
+      expenses: [
+        {
+          id: uid(),
+          date: todayISO(),
+          description: expenseDesc,
+          amount: Number(expenseAmt),
+          recordedBy: session.name,
+        },
+        ...(prev.expenses || []),
+      ],
+    }), "Logged Expense", `GH₵ ${expenseAmt} for ${expenseDesc}`);
+
+    setExpenseDesc(""); setExpenseAmt("");
+    showToast("Manager Expense Recorded!");
+  };
+
+  const handleLogAdminExpense = (e) => {
+    e.preventDefault();
+    if (Number(adminExpenseAmt) <= 0) return showToast("Enter a positive expense amount!", "warn");
+
+    mutate((prev) => ({
+      ...prev,
+      adminExpenses: [
+        {
+          id: uid(),
+          date: todayISO(),
+          description: adminExpenseDesc,
+          amount: Number(adminExpenseAmt),
+          recordedBy: session.name,
+        },
+        ...(prev.adminExpenses || []),
+      ],
+    }), "Logged Admin Expense", `GH₵ ${adminExpenseAmt} for ${adminExpenseDesc}`);
+
+    setAdminExpenseDesc(""); setAdminExpenseAmt("");
+    showToast("Admin Expense Recorded & Balanced!");
+  };
+
+  const allTimeRollIntakePcs = useMemo(() => (data.intake || []).reduce((s, i) => s + (i.qty || 0), 0), [data.intake]);
+  const allTimeRollIssuancePcs = useMemo(() => (data.issuance || []).reduce((s, i) => s + (i.qty || 0), 0), [data.issuance]);
+  const ownerRollBalancePcs = Math.max(0, allTimeRollIntakePcs - allTimeRollIssuancePcs);
+
+  const allTimeRollIntakeKg = useMemo(() => (data.intake || []).reduce((s, i) => s + (i.weightKg || 0), 0), [data.intake]);
+  const allTimeRollIssuanceKg = useMemo(() => (data.issuance || []).reduce((s, i) => s + (i.weightKg || 0), 0), [data.issuance]);
+  const ownerRollBalanceKg = Math.max(0, allTimeRollIntakeKg - allTimeRollIssuanceKg);
+
+  const allTimeBagIntakeQty = useMemo(() => (data.bagIntake || []).reduce((s, i) => s + (i.qty || 0), 0), [data.bagIntake]);
+  const allTimeBagIssuanceQty = useMemo(() => (data.bagIssuance || []).reduce((s, i) => s + (i.qty || 0), 0), [data.bagIssuance]);
+  const ownerBagBalanceQty = Math.max(0, allTimeBagIntakeQty - allTimeBagIssuanceQty);
+
+  const totalManagerExpensesGHS = useMemo(() => (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.expenses]);
+  const totalAdminExpensesGHS = useMemo(() => (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.adminExpenses]);
+  const totalAllExpensesGHS = totalManagerExpensesGHS + totalAdminExpensesGHS;
+
+  const managerMetrics = useMemo(() => {
+    return managersList.map((mgr) => {
+      const runs = (data.productionRuns || []).filter((r) => r.recordedBy === mgr.name);
+      const rollKgUsed = runs.reduce((s, r) => s + (r.weightUsedKg || 0), 0);
+      const rollsCountUsed = Math.round(rollKgUsed / 25);
+
+      const bagUsages = (data.bagUsage || []).filter((u) => u.usedBy === mgr.name);
+      const bagsUsedQty = bagUsages.reduce((s, u) => s + (u.qty || 0), 0);
+
+      const factorySales = (data.sales || []).filter((s) => s.recordedBy === mgr.name);
+      const factorySalesBags = factorySales.reduce((s, f) => s + f.bagsSold, 0);
+      const factorySalesGHS = factorySales.reduce((s, f) => s + f.totalAmount, 0);
+
+      const mgrExpenses = (data.expenses || []).filter((e) => e.recordedBy === mgr.name);
+      const totalExpensesGHS = mgrExpenses.reduce((s, e) => s + e.amount, 0);
+
+      return {
+        managerName: mgr.name,
+        rollKgUsed,
+        rollsCountUsed,
+        bagsUsedQty,
+        factorySalesBags,
+        factorySalesGHS,
+        totalExpensesGHS,
+      };
+    });
+  }, [managersList, data.productionRuns, data.bagUsage, data.sales, data.expenses]);
+
   return (
     <div className="space-y-6">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Welcome back, {session.name}</p>
-        <p className="text-sm text-[#5B6B68]">Sachet Water Operational Overview · {isOwner ? "Super Admin View" : "Manager View"}</p>
+        <p className="text-sm text-[#5B6B68]">Sachet Water Operational Overview · {isOwner ? "Super Admin Dashboard" : "Manager Dashboard"}</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -710,10 +966,154 @@ function Dashboard({ data, session }) {
         <StatCard icon={Wallet} label="Cash On Hand Balance" value={fmtGHS(cashOnHand)} accent={cashOnHand < 0 ? "#C4472F" : "#0B3B45"} />
       </div>
 
-      {!isOwner && (
-        <div className="bg-[#EAF3F1] p-4 rounded-xl border border-[#BFDCD6]">
-          <p className="font-bold text-sm text-[#0B3B45]">Notice to Manager:</p>
-          <p className="text-xs text-[#5B6B68] mt-1">Raw material intake and direct supplier details are managed securely by the Business Owner. Rolls and Packing Bags must be issued by the Owner and explicitly accepted by you before production runs can be logged.</p>
+      {isOwner ? (
+        <div className="space-y-6">
+          <div className="grid lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-1 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="text-[#0B3B45]" size={20} />
+                <p className="font-bold text-[#0B3B45]">Log Admin Expense</p>
+              </div>
+              <form onSubmit={handleLogAdminExpense} className="space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Expense Description</label>
+                  <input value={adminExpenseDesc} onChange={(e) => setAdminExpenseDesc(e.target.value)} placeholder="e.g. Executive travel / GRA Tax" className="inp" required />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Amount (GH₵)</label>
+                  <input type="number" min="0.01" step="0.01" value={adminExpenseAmt} onChange={(e) => setAdminExpenseAmt(e.target.value)} placeholder="e.g. 500" className="inp" required />
+                </div>
+                <button type="submit" className="btn-primary w-full">Record Admin Expense</button>
+              </form>
+            </div>
+
+            <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+              <p className="font-bold text-[#0B3B45] text-base">All Expenses Balancing & Automated Expense Ledger</p>
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="p-3 bg-[#F7F8F5] rounded-xl border border-[#EDEFEA]">
+                  <p className="text-[11px] font-semibold text-gray-500">Manager Expenses</p>
+                  <p className="text-lg font-mono font-bold text-[#0B3B45] mt-1">{fmtGHS(totalManagerExpensesGHS)}</p>
+                </div>
+                <div className="p-3 bg-[#EAF3F1] rounded-xl border border-[#BFDCD6]">
+                  <p className="text-[11px] font-semibold text-[#0B3B45]">Admin Expenses</p>
+                  <p className="text-lg font-mono font-bold text-[#1C8C9E] mt-1">{fmtGHS(totalAdminExpensesGHS)}</p>
+                </div>
+                <div className="p-3 bg-[#FBEAE5] rounded-xl border border-[#EFC3B7]">
+                  <p className="text-[11px] font-semibold text-[#C4472F]">Total System Expenses</p>
+                  <p className="text-lg font-mono font-bold text-[#C4472F] mt-1">{fmtGHS(totalAllExpensesGHS)}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto max-h-44 mt-2">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-[#F7F8F5] text-left">
+                      <th className="p-2">Date</th>
+                      <th className="p-2">Category</th>
+                      <th className="p-2">Recorded By</th>
+                      <th className="p-2">Description</th>
+                      <th className="p-2 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ...(data.adminExpenses || []).map((e) => ({ ...e, type: "Admin" })),
+                      ...(data.expenses || []).map((e) => ({ ...e, type: "Manager" })),
+                    ].sort((a, b) => new Date(b.date) - new Date(a.date)).map((e) => (
+                      <tr key={e.id} className="border-t">
+                        <td className="p-2 font-mono">{e.date}</td>
+                        <td className="p-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${e.type === "Admin" ? "bg-cyan-100 text-cyan-800" : "bg-gray-100 text-gray-800"}`}>
+                            {e.type}
+                          </span>
+                        </td>
+                        <td className="p-2 font-semibold text-blue-900">{e.recordedBy}</td>
+                        <td className="p-2">{e.description}</td>
+                        <td className="p-2 text-right font-mono font-bold text-red-700">{fmtGHS(e.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+            <p className="font-bold text-[#0B3B45] text-base">All-Time Intake Automation, Issuance & Warehouse Balances</p>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="p-4 bg-[#F7F8F5] rounded-xl border space-y-2">
+                <p className="font-bold text-xs text-[#0B3B45] uppercase">Film Rolls Inventory Ledger</p>
+                <div className="flex justify-between text-xs"><span>All-time Intake (Roll Count):</span><span className="font-mono font-bold">{fmt(allTimeRollIntakePcs, 0)} rolls</span></div>
+                <div className="flex justify-between text-xs text-blue-800"><span>Issued to Manager (Roll Count):</span><span className="font-mono font-bold">{fmt(allTimeRollIssuancePcs, 0)} rolls</span></div>
+                <div className="flex justify-between text-xs text-green-800 pt-1 border-t font-bold"><span>Owner Warehouse Roll Count Balance:</span><span className="font-mono">{fmt(ownerRollBalancePcs, 0)} rolls</span></div>
+                <div className="flex justify-between text-xs text-gray-500 pt-1 border-t"><span>All-time Intake Weight:</span><span className="font-mono">{fmt(allTimeRollIntakeKg)} kg</span></div>
+                <div className="flex justify-between text-xs text-gray-500"><span>Issued Weight to Manager:</span><span className="font-mono">{fmt(allTimeRollIssuanceKg)} kg</span></div>
+                <div className="flex justify-between text-xs text-gray-700 font-semibold"><span>Owner Warehouse Weight Balance:</span><span className="font-mono">{fmt(ownerRollBalanceKg)} kg</span></div>
+              </div>
+
+              <div className="p-4 bg-[#F7F8F5] rounded-xl border space-y-2">
+                <p className="font-bold text-xs text-[#0B3B45] uppercase">Packing Bags Inventory Ledger</p>
+                <div className="flex justify-between text-xs"><span>All-time Intake (Owner):</span><span className="font-mono font-bold">{fmt(allTimeBagIntakeQty, 0)} pcs</span></div>
+                <div className="flex justify-between text-xs text-blue-800"><span>Issued to Manager:</span><span className="font-mono font-bold">{fmt(allTimeBagIssuanceQty, 0)} pcs</span></div>
+                <div className="flex justify-between text-xs text-green-800 pt-1 border-t font-bold"><span>Owner Warehouse Balance:</span><span className="font-mono">{fmt(ownerBagBalanceQty, 0)} pcs</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+            <p className="font-bold text-[#0B3B45] text-base">Manager Operational Metrics & Factory Direct Sales</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-[#F7F8F5] text-left">
+                    <th className="p-2">Manager Name</th>
+                    <th className="p-2 text-right">Rolls Used (approx pcs)</th>
+                    <th className="p-2 text-right">Rolls Used (kg)</th>
+                    <th className="p-2 text-right">Packing Bags Used (pcs)</th>
+                    <th className="p-2 text-right">Factory Direct Sales (Bags)</th>
+                    <th className="p-2 text-right">Factory Sales Revenue</th>
+                    <th className="p-2 text-right">Logged Expenses</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {managerMetrics.map((m, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="p-2 font-bold text-[#0B3B45]">{m.managerName}</td>
+                      <td className="p-2 text-right font-mono">{m.rollsCountUsed} rolls</td>
+                      <td className="p-2 text-right font-mono">{m.rollKgUsed} kg</td>
+                      <td className="p-2 text-right font-mono">{m.bagsUsedQty} pcs</td>
+                      <td className="p-2 text-right font-mono font-bold text-blue-900">{m.factorySalesBags} bags</td>
+                      <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(m.factorySalesGHS)}</td>
+                      <td className="p-2 text-right font-mono font-bold text-red-700">{fmtGHS(m.totalExpensesGHS)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <form onSubmit={handleLogExpense} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3 max-w-lg">
+            <div className="flex items-center gap-2">
+              <DollarSign className="text-[#0B3B45]" size={18} />
+              <p className="font-bold text-[#0B3B45]">Record Operational Expense (Manager Entry)</p>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Expense Description</label>
+              <input value={expenseDesc} onChange={(e) => setExpenseDesc(e.target.value)} placeholder="e.g. Factory fuel / generator maintenance" className="inp" required />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Amount (GH₵)</label>
+              <input type="number" min="0.01" step="0.01" value={expenseAmt} onChange={(e) => setExpenseAmt(e.target.value)} placeholder="e.g. 150" className="inp" required />
+            </div>
+            <button type="submit" className="btn-primary w-full">Log Expense to Admin</button>
+          </form>
+
+          <div className="bg-[#EAF3F1] p-4 rounded-xl border border-[#BFDCD6]">
+            <p className="font-bold text-sm text-[#0B3B45]">Notice to Manager:</p>
+            <p className="text-xs text-[#5B6B68] mt-1">Raw material intake is controlled by the Owner. Rolls and Packing Bags issued to you require explicit physical confirmation before being released to production.</p>
+          </div>
         </div>
       )}
     </div>
@@ -760,6 +1160,7 @@ function WarehouseModule({ data, mutate, session, showToast }) {
 }
 
 function OwnerRollIntakeTab({ data, mutate, showToast }) {
+  const [selectedTypeId, setSelectedTypeId] = useState("new");
   const [rollTypeName, setRollTypeName] = useState("");
   const [kgPerRoll, setKgPerRoll] = useState("");
   const [supplier, setSupplier] = useState("");
@@ -767,16 +1168,51 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
 
   const handleCreateTypeAndIntake = (e) => {
     e.preventDefault();
-    if (Number(kgPerRoll) <= 0 || Number(qty) <= 0) return showToast("Negative or zero values not allowed!", "warn");
+    if (Number(qty) <= 0) return showToast("Quantity must be positive!", "warn");
 
-    const typeId = uid();
-    mutate((prev) => ({
-      ...prev,
-      rollTypes: [...prev.rollTypes, { id: typeId, name: rollTypeName, standardWeightKg: Number(kgPerRoll), yieldValue: 900 }],
-      intake: [{ id: uid(), date: todayISO(), rollTypeId: typeId, supplier, qty: Number(qty), weightKg: Number(qty) * Number(kgPerRoll) }, ...prev.intake],
-    }), "Recorded Roll Intake", `${qty} rolls of ${rollTypeName}`);
+    let typeId = selectedTypeId;
+    let typeName = rollTypeName;
+    let weightPerRoll = Number(kgPerRoll);
 
-    setRollTypeName(""); setKgPerRoll(""); setSupplier(""); setQty("");
+    if (selectedTypeId === "new") {
+      if (!rollTypeName.trim() || weightPerRoll <= 0) {
+        return showToast("Provide a valid Roll Type Name and Weight per roll!", "warn");
+      }
+      const existing = (data.rollTypes || []).find(
+        (t) => t.name.trim().toLowerCase() === rollTypeName.trim().toLowerCase()
+      );
+      if (existing) {
+        typeId = existing.id;
+        typeName = existing.name;
+        weightPerRoll = existing.standardWeightKg;
+      } else {
+        typeId = uid();
+      }
+    } else {
+      const existing = (data.rollTypes || []).find((t) => t.id === selectedTypeId);
+      if (existing) {
+        typeName = existing.name;
+        weightPerRoll = existing.standardWeightKg;
+      }
+    }
+
+    mutate((prev) => {
+      const rollTypeExists = (prev.rollTypes || []).some((t) => t.id === typeId);
+      const nextRollTypes = rollTypeExists
+        ? prev.rollTypes
+        : [...(prev.rollTypes || []), { id: typeId, name: typeName.trim(), standardWeightKg: weightPerRoll, yieldValue: 900 }];
+
+      return {
+        ...prev,
+        rollTypes: nextRollTypes,
+        intake: [
+          { id: uid(), date: todayISO(), rollTypeId: typeId, supplier, qty: Number(qty), weightKg: Number(qty) * weightPerRoll },
+          ...(prev.intake || []),
+        ],
+      };
+    }, "Recorded Roll Intake", `${qty} rolls of ${typeName}`);
+
+    setRollTypeName(""); setKgPerRoll(""); setSupplier(""); setQty(""); setSelectedTypeId("new");
     showToast("Roll Intake Recorded!");
   };
 
@@ -784,23 +1220,57 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
     <div className="grid lg:grid-cols-2 gap-4">
       <form onSubmit={handleCreateTypeAndIntake} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
         <p className="font-bold text-[#0B3B45]">Owner Raw Roll Intake</p>
+
         <div>
-          <label className="text-xs font-semibold text-gray-500">Roll Type Name</label>
-          <input value={rollTypeName} onChange={(e) => setRollTypeName(e.target.value)} placeholder="e.g. Standard 25kg Film" className="inp" required />
+          <label className="text-xs font-semibold text-gray-500">Roll Category</label>
+          <select
+            value={selectedTypeId}
+            onChange={(e) => {
+              setSelectedTypeId(e.target.value);
+              if (e.target.value !== "new") {
+                const existing = (data.rollTypes || []).find((t) => t.id === e.target.value);
+                if (existing) setKgPerRoll(String(existing.standardWeightKg));
+              }
+            }}
+            className="inp"
+          >
+            <option value="new">+ Create New Roll Type</option>
+            {(data.rollTypes || []).map((t) => (
+              <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg)</option>
+            ))}
+          </select>
         </div>
+
+        {selectedTypeId === "new" && (
+          <div>
+            <label className="text-xs font-semibold text-gray-500">New Roll Type Name</label>
+            <input value={rollTypeName} onChange={(e) => setRollTypeName(e.target.value)} placeholder="e.g. Standard 25kg Film" className="inp" required={selectedTypeId === "new"} />
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs font-semibold text-gray-500">Weight per Roll (kg)</label>
-            <input type="number" min="0.1" step="0.1" value={kgPerRoll} onChange={(e) => setKgPerRoll(e.target.value)} placeholder="25" className="inp" required />
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={kgPerRoll}
+              onChange={(e) => setKgPerRoll(e.target.value)}
+              placeholder="25"
+              className="inp"
+              disabled={selectedTypeId !== "new"}
+            />
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-500">Quantity Rolls</label>
+            <label className="text-xs font-semibold text-gray-500">Quantity Rolls (Roll Count)</label>
             <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="10" className="inp" required />
           </div>
         </div>
+
         <div>
           <label className="text-xs font-semibold text-gray-500">Supplier Name (Hidden from Manager)</label>
-          <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="e.g. Polytank Ghana" className="inp" required />
+          <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="e.g. Polytank Ghana" className="inp" />
         </div>
         <button type="submit" className="btn-primary w-full"><Plus size={15} /> Save Intake</button>
       </form>
@@ -813,18 +1283,18 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
               <th className="p-2">Date</th>
               <th className="p-2">Roll Type</th>
               <th className="p-2">Supplier</th>
-              <th className="p-2 text-right">Qty</th>
+              <th className="p-2 text-right">Roll Count</th>
               <th className="p-2 text-right">Weight (kg)</th>
             </tr>
           </thead>
           <tbody>
-            {data.intake.map((r) => (
+            {(data.intake || []).map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2 font-mono">{r.date}</td>
-                <td className="p-2 font-semibold">{data.rollTypes.find((t) => t.id === r.rollTypeId)?.name || "Film"}</td>
-                <td className="p-2 text-blue-800 font-semibold">{r.supplier}</td>
-                <td className="p-2 text-right font-mono">{r.qty}</td>
-                <td className="p-2 text-right font-mono">{r.weightKg}</td>
+                <td className="p-2 font-semibold">{(data.rollTypes || []).find((t) => t.id === r.rollTypeId)?.name || "Film"}</td>
+                <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
+                <td className="p-2 text-right font-mono font-bold">{r.qty} rolls</td>
+                <td className="p-2 text-right font-mono">{r.weightKg} kg</td>
               </tr>
             ))}
           </tbody>
@@ -838,11 +1308,17 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
   const [rollTypeId, setRollTypeId] = useState(data.rollTypes[0]?.id || "");
   const [qty, setQty] = useState("");
 
+  useEffect(() => {
+    if ((data.rollTypes || []).length > 0 && !rollTypeId) {
+      setRollTypeId(data.rollTypes[0].id);
+    }
+  }, [data.rollTypes, rollTypeId]);
+
   const handleIssue = (e) => {
     e.preventDefault();
     if (Number(qty) <= 0) return showToast("Enter a positive quantity!", "warn");
 
-    const rType = data.rollTypes.find((t) => t.id === rollTypeId);
+    const rType = (data.rollTypes || []).find((t) => t.id === rollTypeId);
     if (!rType) return showToast("Select a valid roll type", "warn");
 
     const weightKg = Number(qty) * rType.standardWeightKg;
@@ -861,7 +1337,7 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
           confirmedBy: null,
           physicalCount: null,
         },
-        ...prev.issuance,
+        ...(prev.issuance || []),
       ],
     }), "Issued Rolls to Manager", `${qty} rolls issued to Manager`);
 
@@ -876,13 +1352,13 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
         <div>
           <label className="text-xs font-semibold text-gray-500">Select Roll Type</label>
           <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
-            {data.rollTypes.map((t) => (
+            {(data.rollTypes || []).map((t) => (
               <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg/roll)</option>
             ))}
           </select>
         </div>
         <div>
-          <label className="text-xs font-semibold text-gray-500">Number of Rolls to Issue</label>
+          <label className="text-xs font-semibold text-gray-500">Number of Rolls to Issue (Roll Count)</label>
           <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="5" className="inp" required />
         </div>
         <button type="submit" className="btn-primary w-full">Transfer Rolls to Production Floor</button>
@@ -898,7 +1374,7 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
     if (Number(physicalCountInput) < 0) return showToast("Count cannot be negative!", "warn");
 
     mutate((prev) => {
-      const nextIssuance = prev.issuance.map((item) =>
+      const nextIssuance = (prev.issuance || []).map((item) =>
         item.id === issuanceId
           ? { ...item, status: "ACCEPTED", confirmedBy: session.name, physicalCount: Number(physicalCountInput) }
           : item
@@ -907,6 +1383,7 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
       const notif = {
         id: uid(),
         ts: new Date().toLocaleTimeString(),
+        read: false,
         title: "Manager Material Acceptance",
         msg: `Manager ${session.name} accepted roll issuance ID #${issuanceId.slice(0,5)} with physical count: ${physicalCountInput}`,
       };
@@ -938,21 +1415,21 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
               <th className="p-2">Roll Type</th>
-              <th className="p-2 text-right">Issued Qty</th>
+              <th className="p-2 text-right">Issued Roll Count</th>
               <th className="p-2 text-right">Weight (kg)</th>
               <th className="p-2">Status</th>
               <th className="p-2">Physical Count & Confirm</th>
             </tr>
           </thead>
           <tbody>
-            {data.issuance.map((item) => {
-              const rType = data.rollTypes.find((t) => t.id === item.rollTypeId);
+            {(data.issuance || []).map((item) => {
+              const rType = (data.rollTypes || []).find((t) => t.id === item.rollTypeId);
               return (
                 <tr key={item.id} className="border-t">
                   <td className="p-2 font-mono">{item.date}</td>
                   <td className="p-2 font-semibold">{rType?.name || "Roll"}</td>
-                  <td className="p-2 text-right font-mono">{item.qty}</td>
-                  <td className="p-2 text-right font-mono">{item.weightKg}</td>
+                  <td className="p-2 text-right font-mono font-bold">{item.qty} rolls</td>
+                  <td className="p-2 text-right font-mono">{item.weightKg} kg</td>
                   <td className="p-2">
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.status === "ACCEPTED" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
                       {item.status}
@@ -960,7 +1437,7 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
                   </td>
                   <td className="p-2">
                     {item.status === "PENDING" ? (
-                      <AcceptForm onAccept={(count) => handleAccept(item.id, count)} />
+                      <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} />
                     ) : (
                       <span className="text-gray-500 font-mono">Confirmed: {item.physicalCount} pcs by {item.confirmedBy}</span>
                     )}
@@ -975,12 +1452,18 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
   );
 }
 
-function AcceptForm({ onAccept }) {
+function AcceptForm({ session, onAccept }) {
+  const isManager = session?.role === "manager" || session?.role === "owner";
   const [cnt, setCnt] = useState("");
+
+  if (!isManager) {
+    return null;
+  }
+
   return (
     <div className="flex gap-1 items-center">
-      <input type="number" min="0" value={cnt} onChange={(e) => setCnt(e.target.value)} placeholder="Physical Count" className="inp py-1 text-xs w-28" required />
-      <button onClick={() => cnt !== "" && onAccept(cnt)} className="btn-success text-xs py-1 px-2">Accept</button>
+      <input type="number" min="1" value={cnt} onChange={(e) => setCnt(e.target.value)} placeholder="Physical Count" className="inp py-1 text-xs w-28" required />
+      <button type="button" onClick={() => cnt !== "" && onAccept(cnt)} className="btn-success text-xs py-1 px-2">Accept</button>
     </div>
   );
 }
@@ -1013,6 +1496,7 @@ function PackingModule({ data, mutate, session, showToast }) {
 }
 
 function OwnerBagIntakeTab({ data, mutate, showToast }) {
+  const [selectedBagTypeId, setSelectedBagTypeId] = useState("new");
   const [typeName, setTypeName] = useState("");
   const [supplier, setSupplier] = useState("");
   const [qty, setQty] = useState("");
@@ -1021,14 +1505,39 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
     e.preventDefault();
     if (Number(qty) <= 0) return showToast("Quantity must be positive!", "warn");
 
-    const bId = uid();
-    mutate((prev) => ({
-      ...prev,
-      bagTypes: [...prev.bagTypes, { id: bId, name: typeName, capacity: 30 }],
-      bagIntake: [{ id: uid(), date: todayISO(), bagTypeId: bId, supplier, qty: Number(qty) }, ...prev.bagIntake],
-    }), "Bag Intake Recorded", `${qty} pcs ${typeName}`);
+    let bId = selectedBagTypeId;
+    let nameToSave = typeName;
 
-    setTypeName(""); setSupplier(""); setQty("");
+    if (selectedBagTypeId === "new") {
+      if (!typeName.trim()) return showToast("Enter a Bag Type Name!", "warn");
+      const existing = (data.bagTypes || []).find(
+        (t) => t.name.trim().toLowerCase() === typeName.trim().toLowerCase()
+      );
+      if (existing) {
+        bId = existing.id;
+        nameToSave = existing.name;
+      } else {
+        bId = uid();
+      }
+    } else {
+      const existing = (data.bagTypes || []).find((t) => t.id === selectedBagTypeId);
+      if (existing) nameToSave = existing.name;
+    }
+
+    mutate((prev) => {
+      const bagTypeExists = (prev.bagTypes || []).some((t) => t.id === bId);
+      const nextBagTypes = bagTypeExists
+        ? prev.bagTypes
+        : [...(prev.bagTypes || []), { id: bId, name: nameToSave.trim(), capacity: 30 }];
+
+      return {
+        ...prev,
+        bagTypes: nextBagTypes,
+        bagIntake: [{ id: uid(), date: todayISO(), bagTypeId: bId, supplier, qty: Number(qty) }, ...(prev.bagIntake || [])],
+      };
+    }, "Bag Intake Recorded", `${qty} pcs ${nameToSave}`);
+
+    setTypeName(""); setSupplier(""); setQty(""); setSelectedBagTypeId("new");
     showToast("Bag Intake Recorded!");
   };
 
@@ -1036,20 +1545,58 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
     <div className="grid lg:grid-cols-2 gap-4">
       <form onSubmit={handleIntake} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
         <p className="font-bold text-[#0B3B45]">Owner Packing Bags Intake</p>
+
         <div>
-          <label className="text-xs font-semibold text-gray-500">Bag Type / Name</label>
-          <input value={typeName} onChange={(e) => setTypeName(e.target.value)} placeholder="e.g. 30-Sachet Outer Bag" className="inp" required />
+          <label className="text-xs font-semibold text-gray-500">Bag Category</label>
+          <select value={selectedBagTypeId} onChange={(e) => setSelectedBagTypeId(e.target.value)} className="inp">
+            <option value="new">+ Create New Bag Type</option>
+            {(data.bagTypes || []).map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
         </div>
+
+        {selectedBagTypeId === "new" && (
+          <div>
+            <label className="text-xs font-semibold text-gray-500">New Bag Type / Name</label>
+            <input value={typeName} onChange={(e) => setTypeName(e.target.value)} placeholder="e.g. 30-Sachet Outer Bag" className="inp" required={selectedBagTypeId === "new"} />
+          </div>
+        )}
+
         <div>
           <label className="text-xs font-semibold text-gray-500">Quantity (Bags/Bundles)</label>
           <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="500" className="inp" required />
         </div>
         <div>
           <label className="text-xs font-semibold text-gray-500">Supplier (Hidden from Manager)</label>
-          <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="e.g. Ghana Pack Ltd" className="inp" required />
+          <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="e.g. Ghana Pack Ltd" className="inp" />
         </div>
         <button type="submit" className="btn-primary w-full">Save Bag Intake</button>
       </form>
+
+      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+        <p className="font-bold text-[#0B3B45] mb-3">Owner Stock Ledger (Includes Suppliers)</p>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-[#F7F8F5] text-left">
+              <th className="p-2">Date</th>
+              <th className="p-2">Bag Type</th>
+              <th className="p-2">Supplier</th>
+              <th className="p-2 text-right">Qty</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data.bagIntake || []).map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2 font-mono">{r.date}</td>
+                <td className="p-2 font-semibold">{(data.bagTypes || []).find((t) => t.id === r.bagTypeId)?.name || "Bags"}</td>
+                <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
+                <td className="p-2 text-right font-mono">{r.qty}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1057,6 +1604,12 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
 function IssueBagsTab({ data, mutate, session, showToast }) {
   const [bagTypeId, setBagTypeId] = useState(data.bagTypes[0]?.id || "");
   const [qty, setQty] = useState("");
+
+  useEffect(() => {
+    if ((data.bagTypes || []).length > 0 && !bagTypeId) {
+      setBagTypeId(data.bagTypes[0].id);
+    }
+  }, [data.bagTypes, bagTypeId]);
 
   const handleIssue = (e) => {
     e.preventDefault();
@@ -1090,7 +1643,7 @@ function IssueBagsTab({ data, mutate, session, showToast }) {
         <div>
           <label className="text-xs font-semibold text-gray-500">Select Bag Type</label>
           <select value={bagTypeId} onChange={(e) => setBagTypeId(e.target.value)} className="inp" required>
-            {data.bagTypes.map((t) => (
+            {(data.bagTypes || []).map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
@@ -1121,6 +1674,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
       const notif = {
         id: uid(),
         ts: new Date().toLocaleTimeString(),
+        read: false,
         title: "Manager Bag Acceptance",
         msg: `Manager ${session.name} accepted bag transfer ID #${issuanceId.slice(0,5)} with physical count: ${physicalCountInput}`,
       };
@@ -1137,7 +1691,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-[#F2F4EF] p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center bg-white">
+      <div className="p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center bg-white">
         <div>
           <p className="font-bold text-sm text-[#0B3B45]">Manager Accepted Packing Bags Balance</p>
           <p className="text-xs text-gray-500">Required to run production.</p>
@@ -1159,7 +1713,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
           </thead>
           <tbody>
             {(data.bagIssuance || []).map((item) => {
-              const bType = data.bagTypes.find((t) => t.id === item.bagTypeId);
+              const bType = (data.bagTypes || []).find((t) => t.id === item.bagTypeId);
               return (
                 <tr key={item.id} className="border-t">
                   <td className="p-2 font-mono">{item.date}</td>
@@ -1172,7 +1726,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
                   </td>
                   <td className="p-2">
                     {item.status === "PENDING" ? (
-                      <AcceptForm onAccept={(count) => handleAccept(item.id, count)} />
+                      <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} />
                     ) : (
                       <span className="text-gray-500 font-mono">Confirmed: {item.physicalCount} pcs by {item.confirmedBy}</span>
                     )}
@@ -1199,6 +1753,12 @@ function ProductionModule({ data, mutate, session, showToast }) {
   const [actualBags, setActualBags] = useState("");
   const [leakage, setLeakage] = useState("0");
   const [bagsUsedQty, setBagsUsedQty] = useState("");
+
+  useEffect(() => {
+    if ((data.rollTypes || []).length > 0 && !rollTypeId) {
+      setRollTypeId(data.rollTypes[0].id);
+    }
+  }, [data.rollTypes, rollTypeId]);
 
   const canProduce = managerRollsKg > 0 && managerBagsQty > 0;
 
@@ -1239,7 +1799,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
           netAvailableBags: netProduced,
           recordedBy: session.name,
         },
-        ...prev.productionRuns,
+        ...(prev.productionRuns || []),
       ],
       bagUsage: [
         {
@@ -1249,7 +1809,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
           reason: "Production Run",
           usedBy: session.name,
         },
-        ...prev.bagUsage,
+        ...(prev.bagUsage || []),
       ],
     }), "Recorded Production Run", `${netProduced} sachet bags produced`);
 
@@ -1278,7 +1838,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
           <div>
             <label className="text-xs font-semibold text-gray-500">Film Roll Type</label>
             <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
-              {data.rollTypes.map((t) => (
+              {(data.rollTypes || []).map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
@@ -1306,7 +1866,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
             </div>
           </div>
 
-          <button type="submit" className="btn-primary w-full">Record Finished Sachet Goods</button>
+          <button type="submit" className="btn-primary w-full py-2.5">Record Finished Sachet Goods</button>
         </form>
       )}
 
@@ -1324,7 +1884,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
             </tr>
           </thead>
           <tbody>
-            {data.productionRuns.map((r) => (
+            {(data.productionRuns || []).map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2 font-mono">{r.date}</td>
                 <td className="p-2">{r.recordedBy}</td>
@@ -1372,9 +1932,9 @@ function ReceiptModal({ sale, companyName, driversList, onClose }) {
           <div className="text-left text-[11px] space-y-1 py-1">
             <div className="flex justify-between"><span className="text-gray-500">Date/Time:</span><span>{new Date(sale.timestamp || Date.now()).toLocaleString()}</span></div>
             <div className="flex justify-between"><span className="text-gray-500">Customer:</span><span className="font-bold">{sale.customer}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Driver / Truck:</span><span>{driver ? driver.name : "Direct Sale"}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Driver / Truck:</span><span>{driver ? driver.name : "Direct Factory Sale"}</span></div>
             <div className="flex justify-between"><span className="text-gray-500">Payment Channel:</span><span className="uppercase font-semibold text-blue-800">{sale.method}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Cashier:</span><span>{sale.recordedBy}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Cashier / Manager:</span><span>{sale.recordedBy}</span></div>
           </div>
 
           <div className="border-t border-b border-dashed border-gray-300 py-2 space-y-1.5">
@@ -1416,11 +1976,11 @@ function ReceiptModal({ sale, companyName, driversList, onClose }) {
 /*  SALES & BANK DEPOSIT MODULE                                           */
 /* ---------------------------------------------------------------------- */
 function SalesModule({ data, mutate, session, showToast }) {
-  const driversList = useMemo(() => data.users.filter((u) => u.role === "driver"), [data.users]);
+  const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
   const cashAvailable = useMemo(() => computeCashBalance(data), [data]);
 
-  const [driverId, setDriverId] = useState(driversList[0]?.id || "");
+  const [driverId, setDriverId] = useState(driversList[0]?.id || "factory");
   const [customer, setCustomer] = useState("");
   const [bagsSold, setBagsSold] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
@@ -1452,7 +2012,7 @@ function SalesModule({ data, mutate, session, showToast }) {
       id: uid(),
       date: todayISO(),
       timestamp: new Date().toISOString(),
-      driverId,
+      driverId: driverId === "factory" ? null : driverId,
       customer: customer || "Direct Customer",
       bagsSold: Number(bagsSold),
       pricePerBag,
@@ -1464,7 +2024,7 @@ function SalesModule({ data, mutate, session, showToast }) {
 
     mutate((prev) => ({
       ...prev,
-      sales: [newSale, ...prev.sales],
+      sales: [newSale, ...(prev.sales || [])],
     }), "Recorded Sale", `${bagsSold} bags sold to ${customer || "Direct Customer"}`);
 
     setBagsSold(""); setCustomer("");
@@ -1493,7 +2053,7 @@ function SalesModule({ data, mutate, session, showToast }) {
           bankName,
           recordedBy: session.name,
         },
-        ...prev.bankDeposits,
+        ...(prev.bankDeposits || []),
       ],
     }), "Bank Deposit Made", `${fmtGHS(depVal)} deposited to ${bankName}`);
 
@@ -1505,7 +2065,7 @@ function SalesModule({ data, mutate, session, showToast }) {
     <div className="space-y-6">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Sales, Drivers & Cash</p>
-        <p className="text-sm text-[#5B6B68]">Record sales against trucks, print customer receipts, and execute bank deposits.</p>
+        <p className="text-sm text-[#5B6B68]">Record sales against trucks or direct factory sales, print receipts, and reconcile cash.</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
@@ -1524,8 +2084,9 @@ function SalesModule({ data, mutate, session, showToast }) {
           ) : (
             <form onSubmit={handleSale} className="space-y-3">
               <div>
-                <label className="text-xs font-semibold text-gray-500">Delivery Truck Driver</label>
+                <label className="text-xs font-semibold text-gray-500">Sales Channel / Driver</label>
                 <select value={driverId} onChange={(e) => setDriverId(e.target.value)} className="inp" required>
+                  <option value="factory">Direct Factory Sale (Manager Gate Sale)</option>
                   {driversList.map((d) => (
                     <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
@@ -1595,7 +2156,7 @@ function SalesModule({ data, mutate, session, showToast }) {
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date/Time</th>
               <th className="p-2">Customer</th>
-              <th className="p-2">Driver</th>
+              <th className="p-2">Channel / Driver</th>
               <th className="p-2 text-right">Bags Sold</th>
               <th className="p-2 text-right">Total Amount</th>
               <th className="p-2">Method</th>
@@ -1603,13 +2164,13 @@ function SalesModule({ data, mutate, session, showToast }) {
             </tr>
           </thead>
           <tbody>
-            {data.sales.map((s) => {
+            {(data.sales || []).map((s) => {
               const drv = driversList.find((d) => d.id === s.driverId);
               return (
                 <tr key={s.id} className="border-t">
                   <td className="p-2 font-mono">{s.date}</td>
                   <td className="p-2 font-semibold">{s.customer}</td>
-                  <td className="p-2 text-blue-900">{drv?.name || "Direct Sale"}</td>
+                  <td className="p-2 text-blue-900 font-semibold">{drv ? drv.name : "Direct Factory Sale"}</td>
                   <td className="p-2 text-right font-mono">{s.bagsSold}</td>
                   <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
                   <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
@@ -1646,12 +2207,12 @@ function SalesModule({ data, mutate, session, showToast }) {
 function ReportsModule({ data, session }) {
   const isDriver = session.role === "driver";
   const [activeTab, setActiveTab] = useState("drivers");
-  const driversList = useMemo(() => data.users.filter((u) => u.role === "driver"), [data.users]);
+  const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
   const [filterDriver, setFilterDriver] = useState(isDriver ? session.id : "all");
 
   const salesFiltered = useMemo(() => {
-    if (filterDriver === "all") return data.sales;
-    return data.sales.filter((s) => s.driverId === filterDriver);
+    if (filterDriver === "all") return data.sales || [];
+    return (data.sales || []).filter((s) => s.driverId === filterDriver);
   }, [data.sales, filterDriver]);
 
   const metrics = useMemo(() => {
@@ -1677,7 +2238,7 @@ function ReportsModule({ data, session }) {
     const visibleDrivers = isDriver ? driversList.filter((d) => d.id === session.id) : driversList;
 
     return visibleDrivers.map((driver) => {
-      const driverSales = data.sales.filter((s) => s.driverId === driver.id);
+      const driverSales = (data.sales || []).filter((s) => s.driverId === driver.id);
       const totalBags = driverSales.reduce((acc, s) => acc + s.bagsSold, 0);
       const totalRevenue = driverSales.reduce((acc, s) => acc + s.totalAmount, 0);
       const todayBags = driverSales
@@ -1694,7 +2255,7 @@ function ReportsModule({ data, session }) {
     });
   }, [driversList, data.sales, isDriver, session.id]);
 
-  const handlePrintReport = () => {
+  const handleGeneratePdf = () => {
     window.print();
   };
 
@@ -1706,9 +2267,9 @@ function ReportsModule({ data, session }) {
           <p className="text-sm text-[#5B6B68]">Delivery performance, truck logs, and periodic revenue analytics.</p>
         </div>
 
-        <div className="flex gap-2">
-          <button onClick={handlePrintReport} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
-            <Printer size={14} /> Print / Export PDF Report
+        <div className="flex gap-2 no-print">
+          <button onClick={handleGeneratePdf} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
+            <Printer size={14} /> Generate PDF Report
           </button>
           {!isDriver && (
             <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
@@ -1773,7 +2334,7 @@ function ReportsModule({ data, session }) {
 
         {(activeTab === "ledger" && !isDriver) && (
           <div className="space-y-5">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center no-print">
               <span className="text-xs font-bold text-[#0B3B45]">Filter Driver:</span>
               <select value={filterDriver} onChange={(e) => setFilterDriver(e.target.value)} className="inp w-60">
                 <option value="all">All Delivery Truck Drivers</option>
@@ -1808,7 +2369,7 @@ function ReportsModule({ data, session }) {
                     return (
                       <tr key={s.id} className="border-t">
                         <td className="p-2 font-mono">{s.date}</td>
-                        <td className="p-2 font-semibold text-blue-900">{drv?.name || "Unassigned"}</td>
+                        <td className="p-2 font-semibold text-blue-900">{drv?.name || "Direct Factory Sale"}</td>
                         <td className="p-2">{s.customer}</td>
                         <td className="p-2 text-right font-mono">{s.bagsSold}</td>
                         <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
@@ -1838,26 +2399,30 @@ function AdminManagementModule({ data, mutate, showToast }) {
   const [bizAddress, setBizAddress] = useState(data.businessDetails?.address || "");
   const [bizTin, setBizTin] = useState(data.businessDetails?.tin || "");
 
-  const [driverName, setDriverName] = useState("");
+  const [userName, setUserName] = useState("");
+  const [userRole, setUserRole] = useState("driver");
+  const [userPassword, setUserPassword] = useState("123");
   const [truckNo, setTruckNo] = useState("");
-  const [driverPassword, setDriverPassword] = useState("");
+  const [userEmail, setUserEmail] = useState("");
 
-  const drivers = useMemo(() => data.users.filter((u) => u.role === "driver"), [data.users]);
-  const [editDriverId, setEditDriverId] = useState(drivers[0]?.id || "");
-  const [editDriverName, setEditDriverName] = useState("");
-  const [editTruckNo, setEditTruckNo] = useState("");
-  const [editDriverPassword, setEditDriverPassword] = useState("");
+  const usersList = useMemo(() => data.users || [], [data.users]);
 
-  useEffect(() => {
-    const selected = drivers.find((d) => d.id === editDriverId);
-    if (selected) {
-      setEditDriverName(selected.name);
-      setEditTruckNo(selected.truckNo || "");
-      setEditDriverPassword(selected.password || "");
-    }
-  }, [editDriverId, drivers]);
+  const handleUpdatePrice = (e) => {
+    e.preventDefault();
+    if (Number(unitPrice) <= 0) return showToast("Price per bag must be positive!", "warn");
 
-  const handleSaveBusinessDetails = (e) => {
+    mutate((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        pricePerBag: Number(unitPrice),
+      },
+    }), "Updated Price Per Bag", `GH₵ ${unitPrice} per bag`);
+
+    showToast("Unit Price Updated!");
+  };
+
+  const handleUpdateBusiness = (e) => {
     e.preventDefault();
     mutate((prev) => ({
       ...prev,
@@ -1872,235 +2437,226 @@ function AdminManagementModule({ data, mutate, showToast }) {
         ...prev.settings,
         companyName: bizName || prev.settings.companyName,
       },
-    }), "Updated Business Details", bizName);
+    }), "Updated Business Setup", bizName);
 
-    showToast("Business Details Updated!");
+    showToast("Business Information Saved!");
   };
 
-  const handleResetPassword = (e) => {
+  const handleAddUser = (e) => {
     e.preventDefault();
-    if (!newPassword || newPassword.length < 6) return showToast("Password must be at least 6 characters long!", "warn");
+    if (!userName.trim()) return showToast("User name is required!", "warn");
 
-    mutate((prev) => ({
-      ...prev,
-      users: prev.users.map((u) => (u.id === selectedUserId ? { ...u, password: newPassword } : u)),
-    }), "Reset User Password", `Reset password for user ID ${selectedUserId}`);
-
-    setNewPassword("");
-    showToast("Password updated successfully!");
-  };
-
-  const handleUpdatePrice = (e) => {
-    e.preventDefault();
-    if (Number(unitPrice) <= 0) return showToast("Price must be positive!", "warn");
-
-    mutate((prev) => ({
-      ...prev,
-      settings: { ...prev.settings, pricePerBag: Number(unitPrice) },
-    }), "Updated Bag Unit Price", `GH₵ ${unitPrice} per bag`);
-
-    showToast("Unit Selling Price Saved!");
-  };
-
-  const handleAddDriver = (e) => {
-    e.preventDefault();
-    if (!driverName || !truckNo || !driverPassword) return showToast("Fill all driver fields", "warn");
-    if (driverPassword.length < 6) return showToast("Driver password must be at least 6 characters!", "warn");
-
-    const newDriverUser = {
+    const newUser = {
       id: uid(),
-      name: driverName,
-      role: "driver",
-      password: driverPassword,
-      truckNo,
+      name: userName.trim(),
+      role: userRole,
+      password: userPassword,
+      ...(userRole === "driver" ? { truckNo: truckNo.trim() || "N/A" } : {}),
+      ...(userRole === "owner" ? { email: userEmail.trim() } : {}),
     };
 
     mutate((prev) => ({
       ...prev,
-      users: [...prev.users, newDriverUser],
-    }), "Added Delivery Driver", driverName);
+      users: [...(prev.users || []), newUser],
+    }), "Created User Account", `${userName} (${userRole})`);
 
-    setDriverName(""); setTruckNo(""); setDriverPassword("");
-    showToast("Delivery Driver Created!");
+    setUserName("");
+    setTruckNo("");
+    setUserEmail("");
+    setUserPassword("123");
+    showToast("New User Account Created!");
   };
 
-  const handleEditDriver = (e) => {
+  const handleResetUserPassword = (e) => {
     e.preventDefault();
-    if (!editDriverId) return;
+    if (!selectedUserId) return;
+    if (!newPassword || newPassword.length < 3) return showToast("Password too short!", "warn");
+
+    const usr = usersList.find((u) => u.id === selectedUserId);
 
     mutate((prev) => ({
       ...prev,
-      users: prev.users.map((u) =>
-        u.id === editDriverId
-          ? { ...u, name: editDriverName, truckNo: editTruckNo, password: editDriverPassword }
-          : u
-      ),
-    }), "Updated Driver Details", editDriverName);
+      users: (prev.users || []).map((u) => u.id === selectedUserId ? { ...u, password: newPassword } : u),
+    }), "Changed User Password", usr ? usr.name : selectedUserId);
 
-    showToast("Driver details updated successfully!");
+    setNewPassword("");
+    showToast("User Password Updated!");
+  };
+
+  const handleDeleteUser = (userId, name) => {
+    if (usersList.length <= 1) return showToast("Cannot delete the only remaining user!", "warn");
+    if (window.confirm(`Are you sure you want to delete user: ${name}?`)) {
+      mutate((prev) => ({
+        ...prev,
+        users: (prev.users || []).filter((u) => u.id !== userId),
+      }), "Deleted User Account", name);
+      showToast("User Deleted!");
+    }
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin Settings & Security Controls</p>
-        <p className="text-sm text-[#5B6B68]">Manage business details, role passwords, global selling price, and delivery drivers.</p>
+        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin Settings & User Accounts</p>
+        <p className="text-sm text-[#5B6B68]">System parameters, sachet bag pricing, user credentials, and company details.</p>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        {/* BUSINESS DETAILS EDIT FORM */}
-        <form onSubmit={handleSaveBusinessDetails} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <div className="flex justify-between items-center">
-            <p className="font-bold text-[#0B3B45]">Business Details & Branding</p>
-            {data.businessDetails?.isRegistered ? (
-              <span className="text-[10px] bg-green-100 text-green-800 font-bold px-2 py-0.5 rounded">Registered</span>
-            ) : (
-              <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded">Pending Setup</span>
-            )}
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Business / Company Name</label>
-            <input value={bizName} onChange={(e) => setBizName(e.target.value)} placeholder="e.g. Ghana Pure Water Ltd" className="inp" required />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Business Phone Number</label>
-            <input value={bizPhone} onChange={(e) => setBizPhone(e.target.value)} placeholder="e.g. +233 24 123 4567" className="inp" />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Business Address</label>
-            <input value={bizAddress} onChange={(e) => setBizAddress(e.target.value)} placeholder="e.g. Plot 12 Industrial Area, Accra" className="inp" />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Tax Identification Number (TIN)</label>
-            <input value={bizTin} onChange={(e) => setBizTin(e.target.value)} placeholder="e.g. C0001234567" className="inp" />
-          </div>
-          <button type="submit" className="btn-primary w-full"><Pencil size={15} /> Save Business Profile</button>
-        </form>
-
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Price & Unit Setup */}
         <form onSubmit={handleUpdatePrice} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <p className="font-bold text-[#0B3B45]">Standard Selling Price Setup</p>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Sachet Bag Price (GH₵)</label>
-            <input type="number" min="0.01" step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="inp" required />
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Settings2 className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Sachet Bag Pricing Setup</p>
           </div>
-          <button type="submit" className="btn-primary w-full">Save Selling Price</button>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Global Sales Price Per Sachet Bag (GH₵)</label>
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={unitPrice}
+              onChange={(e) => setUnitPrice(e.target.value)}
+              className="inp mt-1"
+              required
+            />
+          </div>
+          <button type="submit" className="btn-primary w-full">Update Bag Price</button>
         </form>
 
-        <form onSubmit={handleResetPassword} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <p className="font-bold text-[#0B3B45]">System Account Password Reset</p>
+        {/* Business Registration */}
+        <form onSubmit={handleUpdateBusiness} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Building className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Company & GRA Details</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Business Name</label>
+              <input value={bizName} onChange={(e) => setBizName(e.target.value)} placeholder="Company Name" className="inp mt-1" required />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Phone</label>
+              <input value={bizPhone} onChange={(e) => setBizPhone(e.target.value)} placeholder="Phone" className="inp mt-1" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Address / City</label>
+              <input value={bizAddress} onChange={(e) => setBizAddress(e.target.value)} placeholder="Location" className="inp mt-1" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">TIN Number</label>
+              <input value={bizTin} onChange={(e) => setBizTin(e.target.value)} placeholder="TIN" className="inp mt-1" />
+            </div>
+          </div>
+          <button type="submit" className="btn-primary w-full">Save Business Info</button>
+        </form>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Create User Account */}
+        <form onSubmit={handleAddUser} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Users className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Create New User / Driver</p>
+          </div>
+
           <div>
-            <label className="text-xs font-semibold text-gray-500">Select Role Account</label>
-            <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} className="inp">
-              {data.users.map((u) => (
+            <label className="text-xs font-semibold text-gray-500">Full Name</label>
+            <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="e.g. Ama Serwaa" className="inp mt-1" required />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">System Role</label>
+              <select value={userRole} onChange={(e) => setUserRole(e.target.value)} className="inp mt-1">
+                <option value="driver">Delivery Driver</option>
+                <option value="cashier">Plant Cashier</option>
+                <option value="manager">Factory Manager</option>
+                <option value="owner">Business Owner</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Password</label>
+              <input type="text" value={userPassword} onChange={(e) => setUserPassword(e.target.value)} placeholder="123" className="inp mt-1" required />
+            </div>
+          </div>
+
+          {userRole === "driver" && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Truck Number / Reg Plate</label>
+              <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. GT-1022-22" className="inp mt-1" required />
+            </div>
+          )}
+
+          {userRole === "owner" && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Admin Recovery Email</label>
+              <input type="email" value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="admin@pureledger.com" className="inp mt-1" required />
+            </div>
+          )}
+
+          <button type="submit" className="btn-primary w-full"><Plus size={15} /> Add User Account</button>
+        </form>
+
+        {/* Change Password */}
+        <form onSubmit={handleResetUserPassword} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Lock className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Reset User Credentials</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Target User</label>
+            <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} className="inp mt-1">
+              {usersList.map((u) => (
                 <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
               ))}
             </select>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">New Password (Min 6 chars)</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="inp" required />
-          </div>
-          <button type="submit" className="btn-primary w-full">Set Password</button>
-        </form>
 
-        <form onSubmit={handleAddDriver} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <p className="font-bold text-[#0B3B45]">Register Driver Account</p>
           <div>
-            <label className="text-xs font-semibold text-gray-500">Driver Full Name</label>
-            <input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="e.g. Yaw Mensah" className="inp" required />
+            <label className="text-xs font-semibold text-gray-500">New Password</label>
+            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password" className="inp mt-1" required />
           </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Truck Reg. Number</label>
-            <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. GT-8819-23" className="inp" required />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Login Password</label>
-            <input type="password" value={driverPassword} onChange={(e) => setDriverPassword(e.target.value)} placeholder="Assign password" className="inp" required />
-          </div>
-          <button type="submit" className="btn-primary w-full"><Plus size={15} /> Add Driver</button>
-        </form>
 
-        <form onSubmit={handleEditDriver} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3 lg:col-span-2">
-          <p className="font-bold text-[#0B3B45]">Edit Driver Details</p>
-          <div className="grid md:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Select Driver</label>
-              <select value={editDriverId} onChange={(e) => setEditDriverId(e.target.value)} className="inp" required>
-                {drivers.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Name</label>
-              <input value={editDriverName} onChange={(e) => setEditDriverName(e.target.value)} className="inp" required />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Truck Reg. Number</label>
-              <input value={editTruckNo} onChange={(e) => setEditTruckNo(e.target.value)} className="inp" required />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Password</label>
-              <input type="password" value={editDriverPassword} onChange={(e) => setEditDriverPassword(e.target.value)} className="inp" required />
-            </div>
-          </div>
-          <button type="submit" className="btn-primary w-full"><Pencil size={15} /> Update Driver Details</button>
+          <button type="submit" className="btn-primary w-full">Update Password</button>
         </form>
       </div>
-    </div>
-  );
-}
 
-/* ---------------------------------------------------------------------- */
-/*  AUDIT LOG & TOAST COMPONENTS                                          */
-/* ---------------------------------------------------------------------- */
-function AuditLog({ data }) {
-  const handlePrintAudit = () => {
-    window.print();
-  };
-
-  return (
-    <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
-      <div className="flex justify-between items-center">
-        <p className="font-bold text-[#0B3B45]">System Security Audit Trail</p>
-        <button onClick={handlePrintAudit} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
-          <Printer size={14} /> Print Audit Trail PDF
-        </button>
-      </div>
-
-      <div id="printable-area" className="max-h-96 overflow-y-auto">
+      {/* User Accounts List */}
+      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+        <p className="font-bold text-[#0B3B45] mb-3">All System Accounts</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Timestamp</th>
-              <th className="p-2">User</th>
+              <th className="p-2">Name</th>
               <th className="p-2">Role</th>
-              <th className="p-2">Action</th>
-              <th className="p-2">Details</th>
+              <th className="p-2">Truck / Detail</th>
+              <th className="p-2">Email</th>
+              <th className="p-2 text-center">Action</th>
             </tr>
           </thead>
           <tbody>
-            {data.auditLog.map((a) => (
-              <tr key={a.id} className="border-t">
-                <td className="p-2 font-mono text-gray-400">{new Date(a.ts).toLocaleString()}</td>
-                <td className="p-2 font-semibold">{a.user}</td>
-                <td className="p-2 font-mono text-blue-800">{a.role}</td>
-                <td className="p-2 font-bold">{a.action}</td>
-                <td className="p-2 text-gray-600">{a.detail}</td>
+            {usersList.map((u) => (
+              <tr key={u.id} className="border-t">
+                <td className="p-2 font-bold text-[#0B3B45]">{u.name}</td>
+                <td className="p-2 uppercase font-mono text-[10px]">{u.role}</td>
+                <td className="p-2 font-mono text-gray-600">{u.truckNo || "N/A"}</td>
+                <td className="p-2 text-gray-500">{u.email || "N/A"}</td>
+                <td className="p-2 text-center">
+                  <button
+                    onClick={() => handleDeleteUser(u.id, u.name)}
+                    className="p-1 text-red-600 hover:bg-red-50 rounded"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </div>
-  );
-}
-
-function Toast({ msg, tone }) {
-  return (
-    <div className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl text-xs font-bold text-white flex items-center gap-2 ${tone === "warn" ? "bg-[#C4472F]" : "bg-[#2A6E4A]"}`}>
-      <CheckCircle2 size={16} />
-      <span>{msg}</span>
     </div>
   );
 }
