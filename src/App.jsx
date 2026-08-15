@@ -7,7 +7,7 @@ import {
   LogOut, Plus, ChevronRight, AlertTriangle, CheckCircle2, Wifi, WifiOff,
   Users, Settings2, Scale, TrendingUp, TrendingDown, ClipboardList, X, Lock,
   Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt,
-  Building, DollarSign, RotateCcw, Trash2, Tag, PieChart, UserPlus, Cpu
+  Building, DollarSign, RotateCcw, Trash2, Tag, PieChart, UserPlus, Cpu, Save
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -49,7 +49,6 @@ if ("serviceWorker" in navigator) {
 /* ---------------------------------------------------------------------- */
 const DB_NAME = "pureledger_store";
 const STORE_NAME = "sync-queue";
-const BATCH_SIZE = 50;
 
 function openDB(name, version, { upgrade }) {
   return new Promise((resolve, reject) => {
@@ -134,20 +133,40 @@ const emptyData = {
   auditLog: [],
 };
 
+function normalizeData(data) {
+  return {
+    ...emptyData,
+    ...data,
+    rolesConfig: { ...emptyData.rolesConfig, ...(data?.rolesConfig || {}) },
+    expenseCategories: data?.expenseCategories || DEFAULT_EXPENSE_CATEGORIES,
+    settings: { ...emptyData.settings, ...(data?.settings || {}) },
+    businessDetails: { ...emptyData.businessDetails, ...(data?.businessDetails || {}) },
+    users: data?.users || emptyData.users,
+    rollTypes: data?.rollTypes || [],
+    intake: data?.intake || [],
+    issuance: data?.issuance || [],
+    bagTypes: data?.bagTypes || [],
+    bagIntake: data?.bagIntake || [],
+    bagIssuance: data?.bagIssuance || [],
+    bagUsage: data?.bagUsage || [],
+    productionRuns: data?.productionRuns || [],
+    sales: data?.sales || [],
+    debtPayments: data?.debtPayments || [],
+    expenses: data?.expenses || [],
+    adminExpenses: data?.adminExpenses || [],
+    bankDeposits: data?.bankDeposits || [],
+    notifications: data?.notifications || [],
+    auditLog: data?.auditLog || [],
+  };
+}
+
 async function loadData() {
   if (supabase && navigator.onLine) {
     try {
       const { data: remote, error } = await supabase.from("pureledger_store").select("data").eq("id", "main_data").single();
       if (!error && remote && remote.data) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.data));
-        return {
-          ...emptyData,
-          ...remote.data,
-          rolesConfig: { ...emptyData.rolesConfig, ...(remote.data.rolesConfig || {}) },
-          expenseCategories: remote.data.expenseCategories || DEFAULT_EXPENSE_CATEGORIES,
-          settings: { ...emptyData.settings, ...(remote.data.settings || {}) },
-          businessDetails: { ...emptyData.businessDetails, ...(remote.data.businessDetails || {}) }
-        };
+        return normalizeData(remote.data);
       }
     } catch (e) {
       console.warn("Supabase load failed, falling back to local storage", e);
@@ -158,14 +177,7 @@ async function loadData() {
     const res = localStorage.getItem(STORAGE_KEY);
     if (!res) return emptyData;
     const parsed = JSON.parse(res);
-    return {
-      ...emptyData,
-      ...parsed,
-      rolesConfig: { ...emptyData.rolesConfig, ...(parsed.rolesConfig || {}) },
-      expenseCategories: parsed.expenseCategories || DEFAULT_EXPENSE_CATEGORIES,
-      settings: { ...emptyData.settings, ...(parsed.settings || {}) },
-      businessDetails: { ...emptyData.businessDetails, ...(parsed.businessDetails || {}) }
-    };
+    return normalizeData(parsed);
   } catch {
     return emptyData;
   }
@@ -794,12 +806,15 @@ function TopBar({ session, rolesConfig, online, onMenuClick, onLogout, data, mut
 function computeFinishedGoods(data) {
   const produced = (data.productionRuns || []).reduce((s, r) => s + (r.netAvailableBags || 0), 0);
   const sold = (data.sales || []).reduce((s, r) => s + (r.bagsSold || 0), 0);
-  const freeDistributed = (data.sales || []).reduce((s, r) => s + (r.freeBags || 0), 0);
+  const freeDistributedSales = (data.sales || []).reduce((s, r) => s + (r.freeBags || 0), 0);
+  const salesLeakage = (data.sales || []).reduce((s, r) => s + (r.leakageBags || 0), 0);
+
   return {
     totalProduced: produced,
     totalSold: sold,
-    totalFreeDistributed: freeDistributed,
-    availableForSale: Math.max(0, produced - sold - freeDistributed),
+    totalFreeDistributedSales: freeDistributedSales,
+    totalSalesLeakage: salesLeakage,
+    availableForSale: Math.max(0, produced - sold - freeDistributedSales - salesLeakage),
   };
 }
 
@@ -812,6 +827,10 @@ function computeManagerAcceptedRolls(data) {
   const usedRollsCount = (data.productionRuns || []).reduce((s, p) => s + (p.rollsUsedCount || 0), 0);
 
   return {
+    acceptedRollsCount,
+    acceptedKg,
+    usedRollsCount,
+    usedKg,
     rollsCount: Math.max(0, acceptedRollsCount - usedRollsCount),
     weightKg: Math.max(0, acceptedKg - usedKg),
   };
@@ -820,7 +839,11 @@ function computeManagerAcceptedRolls(data) {
 function computeManagerAcceptedBags(data) {
   const accepted = (data.bagIssuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.physicalCount || i.qty || 0), 0);
   const used = (data.bagUsage || []).reduce((s, u) => s + (u.qty || 0), 0);
-  return Math.max(0, accepted - used);
+  return {
+    acceptedBags: accepted,
+    usedBags: used,
+    remainingBags: Math.max(0, accepted - used),
+  };
 }
 
 function computeCashBalance(data) {
@@ -911,7 +934,7 @@ function Dashboard({ data, mutate, session, showToast }) {
   const isOwner = session.role === "owner";
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
   const managerRolls = useMemo(() => computeManagerAcceptedRolls(data), [data]);
-  const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
+  const managerBags = useMemo(() => computeManagerAcceptedBags(data), [data]);
   const cashOnHand = useMemo(() => computeCashBalance(data), [data]);
 
   const categories = data.expenseCategories || DEFAULT_EXPENSE_CATEGORIES;
@@ -923,6 +946,18 @@ function Dashboard({ data, mutate, session, showToast }) {
   const [adminExpenseDesc, setAdminExpenseDesc] = useState("");
   const [adminExpenseCategory, setAdminExpenseCategory] = useState(categories[0] || "Utilities & Fuel");
   const [adminExpenseAmt, setAdminExpenseAmt] = useState("");
+
+  const totalManagerExpensesGHS = useMemo(() => (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.expenses]);
+  const totalAdminExpensesGHS = useMemo(() => (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.adminExpenses]);
+  const totalAllExpensesGHS = totalManagerExpensesGHS + totalAdminExpensesGHS;
+
+  const productionLeakages = useMemo(() => (data.productionRuns || []).reduce((s, p) => s + (p.leakageBags || 0), 0), [data.productionRuns]);
+  const salesLeakages = useMemo(() => (data.sales || []).reduce((s, sl) => s + (sl.leakageBags || 0), 0), [data.sales]);
+  const totalLeakages = productionLeakages + salesLeakages;
+
+  const productionFreeBags = useMemo(() => (data.productionRuns || []).reduce((s, p) => s + (p.freeBags || 0), 0), [data.productionRuns]);
+  const salesFreeBags = useMemo(() => (data.sales || []).reduce((s, sl) => s + (sl.freeBags || 0), 0), [data.sales]);
+  const totalFreeGiveaways = productionFreeBags + salesFreeBags;
 
   const handleLogExpense = (e) => {
     e.preventDefault();
@@ -987,10 +1022,6 @@ function Dashboard({ data, mutate, session, showToast }) {
     return totals;
   }, [data.expenses, data.adminExpenses, categories]);
 
-  const totalManagerExpensesGHS = useMemo(() => (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.expenses]);
-  const totalAdminExpensesGHS = useMemo(() => (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.adminExpenses]);
-  const totalAllExpensesGHS = totalManagerExpensesGHS + totalAdminExpensesGHS;
-
   return (
     <div className="space-y-6">
       <div>
@@ -1000,9 +1031,44 @@ function Dashboard({ data, mutate, session, showToast }) {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard icon={Droplets} label="Sellable Sachet Bags" value={`${fmt(finished.availableForSale, 0)} bags`} accent="#2A6E4A" />
-        <StatCard icon={Warehouse} label="Manager Floor Rolls (Accepted)" value={`${fmt(managerRolls.rollsCount, 0)} rolls (${fmt(managerRolls.weightKg)} kg)`} accent="#1C8C9E" />
-        <StatCard icon={PackageOpen} label="Manager Packing Bags" value={`${fmt(managerBagsQty, 0)} pcs`} accent="#E8A23D" />
+        <StatCard icon={Warehouse} label="Manager Rolls Remaining" value={`${fmt(managerRolls.rollsCount, 0)} rolls (${fmt(managerRolls.weightKg)} kg)`} accent="#1C8C9E" />
+        <StatCard icon={PackageOpen} label="Manager Bags Remaining" value={`${fmt(managerBags.remainingBags, 0)} pcs`} accent="#E8A23D" />
         <StatCard icon={Wallet} label="Cash On Hand Balance" value={fmtGHS(cashOnHand)} accent={cashOnHand < 0 ? "#C4472F" : "#0B3B45"} />
+      </div>
+
+      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+        <p className="font-bold text-[#0B3B45] text-base border-b pb-2">Manager Floor Operational Summary</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="p-3 rounded-xl bg-[#F7F8F5] border border-[#EDEFEA]">
+            <p className="text-[11px] font-semibold text-gray-500 uppercase">Rolls Used / Accepted</p>
+            <p className="text-sm font-mono font-bold text-[#0B3B45] mt-1">{fmt(managerRolls.usedRollsCount, 0)} / {fmt(managerRolls.acceptedRollsCount, 0)} rolls</p>
+            <p className="text-[10px] text-gray-400 font-mono">({fmt(managerRolls.usedKg)} kg used)</p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#F7F8F5] border border-[#EDEFEA]">
+            <p className="text-[11px] font-semibold text-gray-500 uppercase">Packing Bags Used</p>
+            <p className="text-sm font-mono font-bold text-[#0B3B45] mt-1">{fmt(managerBags.usedBags, 0)} / {fmt(managerBags.acceptedBags, 0)} pcs</p>
+            <p className="text-[10px] text-gray-400 font-mono">({fmt(managerBags.remainingBags, 0)} pcs remaining)</p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#FBEAE5] border border-[#EFC3B7]">
+            <p className="text-[11px] font-semibold text-[#C4472F] uppercase">Manager Total Expenses</p>
+            <p className="text-sm font-mono font-bold text-[#C4472F] mt-1">{fmtGHS(totalManagerExpensesGHS)}</p>
+            <p className="text-[10px] text-red-500 font-mono">Operational outlay</p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#FFF6E5] border border-[#F3E1B9]">
+            <p className="text-[11px] font-semibold text-amber-800 uppercase">Total Leakages</p>
+            <p className="text-sm font-mono font-bold text-amber-800 mt-1">{fmt(totalLeakages, 0)} bags</p>
+            <p className="text-[10px] text-amber-700 font-mono">({productionLeakages} prod + {salesLeakages} supply)</p>
+          </div>
+
+          <div className="p-3 rounded-xl bg-[#EAF3F1] border border-[#BFDCD6]">
+            <p className="text-[11px] font-semibold text-[#0B3B45] uppercase">Total Free Giveaway</p>
+            <p className="text-sm font-mono font-bold text-[#0B3B45] mt-1">{fmt(totalFreeGiveaways, 0)} bags</p>
+            <p className="text-[10px] text-teal-700 font-mono">({productionFreeBags} prod + {salesFreeBags} sales)</p>
+          </div>
+        </div>
       </div>
 
       {isOwner ? (
@@ -1674,7 +1740,7 @@ function IssueBagsTab({ data, mutate, session, showToast }) {
 }
 
 function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
-  const managerAcceptedQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
+  const managerBags = useMemo(() => computeManagerAcceptedBags(data), [data]);
 
   const handleAccept = (issuanceId, physicalCountInput) => {
     if (Number(physicalCountInput) < 0) return showToast("Count cannot be negative!", "warn");
@@ -1711,7 +1777,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
           <p className="font-bold text-sm text-[#0B3B45]">Manager Accepted Packing Bags Balance</p>
           <p className="text-xs text-gray-500">Required to run production.</p>
         </div>
-        <p className="text-2xl font-mono font-bold text-[#E8A23D]">{fmt(managerAcceptedQty, 0)} pcs</p>
+        <p className="text-2xl font-mono font-bold text-[#E8A23D]">{fmt(managerBags.remainingBags, 0)} pcs</p>
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
@@ -1757,14 +1823,14 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  ENHANCED PRODUCTION MODULE                                             */
+/*  PRODUCTION MODULE                                                     */
 /* ---------------------------------------------------------------------- */
 function ProductionModule({ data, mutate, session, showToast }) {
   const managerRolls = useMemo(() => computeManagerAcceptedRolls(data), [data]);
-  const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
+  const managerBags = useMemo(() => computeManagerAcceptedBags(data), [data]);
 
   const [operatorName, setOperatorName] = useState("");
-  const [machineUnit, setMachineUnit] = useState("Machine 1 - Water Cutting Line");
+  const [machineUnit, setMachineUnit] = useState("Machine 1 - Koyo Cutting Line");
   const [rollTypeId, setRollTypeId] = useState(data.rollTypes[0]?.id || "");
   const [rollsUsedCount, setRollsUsedCount] = useState("1");
   const [weightUsed, setWeightUsed] = useState("");
@@ -1782,7 +1848,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
   const selectedType = (data.rollTypes || []).find(t => t.id === rollTypeId);
   const autoWeight = selectedType ? Number(rollsUsedCount || 0) * selectedType.standardWeightKg : 25;
 
-  const canProduce = managerRolls.rollsCount > 0 && managerBagsQty > 0;
+  const canProduce = managerRolls.rollsCount > 0 && managerBags.remainingBags > 0;
 
   const handleRunProduction = (e) => {
     e.preventDefault();
@@ -1809,8 +1875,8 @@ function ProductionModule({ data, mutate, session, showToast }) {
       return;
     }
 
-    if (Number(bagsUsedQty) > managerBagsQty) {
-      showToast(`Cannot use more packing bags than available (${managerBagsQty} pcs)`, "warn");
+    if (Number(bagsUsedQty) > managerBags.remainingBags) {
+      showToast(`Cannot use more packing bags than available (${managerBags.remainingBags} pcs)`, "warn");
       return;
     }
 
@@ -1908,7 +1974,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-500">Packing Bags Used (pcs) *</label>
-              <input type="number" min="1" max={managerBagsQty} value={bagsUsedQty} onChange={(e) => setBagsUsedQty(e.target.value)} placeholder="e.g. 30" className="inp" required />
+              <input type="number" min="1" max={managerBags.remainingBags} value={bagsUsedQty} onChange={(e) => setBagsUsedQty(e.target.value)} placeholder="e.g. 30" className="inp" required />
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500">Gross Sachet Water Bags Produced *</label>
@@ -1971,7 +2037,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
 /* ---------------------------------------------------------------------- */
 /*  PRINTABLE RECEIPT MODAL                                                */
 /* ---------------------------------------------------------------------- */
-function ReceiptModal({ sale, companyName, driversList, onClose }) {
+function ReceiptModal({ sale, companyName, driversList = [], onClose }) {
   if (!sale) return null;
   const driver = driversList.find((d) => d.id === sale.driverId);
 
@@ -2019,6 +2085,12 @@ function ReceiptModal({ sale, companyName, driversList, onClose }) {
                 <span>{sale.freeBags} bags</span>
               </div>
             )}
+            {sale.leakageBags > 0 && (
+              <div className="flex justify-between text-left text-red-700 font-bold">
+                <span>Sales / Supply Leakages</span>
+                <span>{sale.leakageBags} bags</span>
+              </div>
+            )}
           </div>
 
           <div className="pt-1 flex justify-between items-center text-sm font-bold">
@@ -2046,7 +2118,7 @@ function ReceiptModal({ sale, companyName, driversList, onClose }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  SALES & BANK DEPOSIT MODULE WITH FREE BAGS                            */
+/*  SALES & BANK DEPOSIT MODULE WITH LEAKAGES & CASHIER RECEIPT CHOICE     */
 /* ---------------------------------------------------------------------- */
 function SalesModule({ data, mutate, session, showToast }) {
   const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
@@ -2057,6 +2129,7 @@ function SalesModule({ data, mutate, session, showToast }) {
   const [customer, setCustomer] = useState("");
   const [bagsSold, setBagsSold] = useState("");
   const [freeBagsGiven, setFreeBagsGiven] = useState("0");
+  const [leakageBagsGiven, setLeakageBagsGiven] = useState("0");
   const [paymentMethod, setPaymentMethod] = useState("cash");
 
   const [depositAmount, setDepositAmount] = useState("");
@@ -2064,25 +2137,25 @@ function SalesModule({ data, mutate, session, showToast }) {
 
   const [activeReceiptSale, setActiveReceiptSale] = useState(null);
 
-  const handleSale = (e) => {
-    e.preventDefault();
+  const handleSale = (e, shouldPrintReceipt = true) => {
+    if (e) e.preventDefault();
 
-    const totalBagsRequested = Number(bagsSold || 0) + Number(freeBagsGiven || 0);
+    const totalBagsDeducted = Number(bagsSold || 0) + Number(freeBagsGiven || 0) + Number(leakageBagsGiven || 0);
 
     if (finished.availableForSale <= 0) {
       showToast("SALES DISALLOWED: Zero sachet bags available in inventory!", "warn");
       return;
     }
 
-    if (totalBagsRequested <= 0) return showToast("Enter a valid quantity of sold or free bags!", "warn");
+    if (totalBagsDeducted <= 0) return showToast("Enter a valid quantity of sold, free, or leakage bags!", "warn");
 
-    if (totalBagsRequested > finished.availableForSale) {
-      showToast(`Cannot issue more bags than available in stock (${finished.availableForSale} bags)`, "warn");
+    if (totalBagsDeducted > finished.availableForSale) {
+      showToast(`Cannot issue/deduct more bags than available in stock (${finished.availableForSale} bags)`, "warn");
       return;
     }
 
     const pricePerBag = data.settings.pricePerBag || 5.0;
-    const totalAmount = Number(bagsSold) * pricePerBag;
+    const totalAmount = Number(bagsSold || 0) * pricePerBag;
 
     const newSale = {
       id: uid(),
@@ -2092,6 +2165,7 @@ function SalesModule({ data, mutate, session, showToast }) {
       customer: customer || "Direct Customer",
       bagsSold: Number(bagsSold || 0),
       freeBags: Number(freeBagsGiven || 0),
+      leakageBags: Number(leakageBagsGiven || 0),
       pricePerBag,
       totalAmount,
       amountPaid: totalAmount,
@@ -2102,11 +2176,14 @@ function SalesModule({ data, mutate, session, showToast }) {
     mutate((prev) => ({
       ...prev,
       sales: [newSale, ...(prev.sales || [])],
-    }), "Recorded Sale", `${bagsSold} sold + ${freeBagsGiven} free bags to ${customer || "Direct Customer"}`);
+    }), "Recorded Sale", `${bagsSold} sold + ${freeBagsGiven} free + ${leakageBagsGiven} leakage bags to ${customer || "Direct Customer"}`);
 
-    setBagsSold(""); setFreeBagsGiven("0"); setCustomer("");
+    setBagsSold(""); setFreeBagsGiven("0"); setLeakageBagsGiven("0"); setCustomer("");
     showToast("Sale Recorded Successfully!");
-    setActiveReceiptSale(newSale);
+
+    if (shouldPrintReceipt) {
+      setActiveReceiptSale(newSale);
+    }
   };
 
   const handleBankDeposit = (e) => {
@@ -2142,13 +2219,13 @@ function SalesModule({ data, mutate, session, showToast }) {
     <div className="space-y-6">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Sales, Drivers & Cash</p>
-        <p className="text-sm text-[#5B6B68]">Record paid sales and free/promotional bags, print receipts, and reconcile cash deposits.</p>
+        <p className="text-sm text-[#5B6B68]">Record paid sales, supply leakages, and free promotional bags, manage receipts, and reconcile cash deposits.</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
           <div className="flex justify-between items-center border-b pb-2">
-            <p className="font-bold text-[#0B3B45]">Record Sachet Water Sale & Free Bags</p>
+            <p className="font-bold text-[#0B3B45]">Record Sachet Water Sale, Supply Leakage & Free Bags</p>
             <span className="text-xs font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded">
               Stock: {fmt(finished.availableForSale, 0)} bags
             </span>
@@ -2159,7 +2236,7 @@ function SalesModule({ data, mutate, session, showToast }) {
               Sales locked! Zero sachet bags available in inventory.
             </div>
           ) : (
-            <form onSubmit={handleSale} className="space-y-3">
+            <form onSubmit={(e) => e.preventDefault()} className="space-y-3">
               <div>
                 <label className="text-xs font-semibold text-gray-500">Sales Channel / Driver</label>
                 <select value={driverId} onChange={(e) => setDriverId(e.target.value)} className="inp" required>
@@ -2175,14 +2252,18 @@ function SalesModule({ data, mutate, session, showToast }) {
                 <input value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="e.g. Abena Trading" className="inp" required />
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
-                  <label className="text-xs font-semibold text-gray-500">Paid Bags Quantity</label>
+                  <label className="text-xs font-semibold text-gray-500">Paid Bags</label>
                   <input type="number" min="0" value={bagsSold} onChange={(e) => setBagsSold(e.target.value)} placeholder="100" className="inp" />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-amber-700">Free / Promo Bags</label>
+                  <label className="text-xs font-semibold text-amber-700">Free Bags</label>
                   <input type="number" min="0" value={freeBagsGiven} onChange={(e) => setFreeBagsGiven(e.target.value)} placeholder="0" className="inp" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-red-700">Supply Leakage</label>
+                  <input type="number" min="0" value={leakageBagsGiven} onChange={(e) => setLeakageBagsGiven(e.target.value)} placeholder="0" className="inp" />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500">Unit Price</label>
@@ -2199,9 +2280,22 @@ function SalesModule({ data, mutate, session, showToast }) {
                 </select>
               </div>
 
-              <button type="submit" className="btn-primary w-full py-2.5">
-                <Receipt size={16} /> Complete Sale & Print Receipt
-              </button>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={(e) => handleSale(e, true)}
+                  className="btn-primary flex-1 py-2.5"
+                >
+                  <Printer size={16} /> Save & Print Receipt
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => handleSale(e, false)}
+                  className="btn-success flex-1 py-2.5"
+                >
+                  <Save size={16} /> Save Only (No Receipt)
+                </button>
+              </div>
             </form>
           )}
         </div>
@@ -2231,7 +2325,7 @@ function SalesModule({ data, mutate, session, showToast }) {
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Recent Sales Transactions & Free Bags</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Recent Sales Transactions, Leakages & Free Bags</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
@@ -2240,6 +2334,7 @@ function SalesModule({ data, mutate, session, showToast }) {
               <th className="p-2">Channel / Driver</th>
               <th className="p-2 text-right">Bags Sold</th>
               <th className="p-2 text-right">Free Bags</th>
+              <th className="p-2 text-right">Supply Leakage</th>
               <th className="p-2 text-right">Total Amount</th>
               <th className="p-2">Method</th>
               <th className="p-2 text-center">Receipt</th>
@@ -2255,14 +2350,16 @@ function SalesModule({ data, mutate, session, showToast }) {
                   <td className="p-2 text-blue-900 font-semibold">{drv ? drv.name : "Direct Factory Sale"}</td>
                   <td className="p-2 text-right font-mono font-bold">{s.bagsSold}</td>
                   <td className="p-2 text-right font-mono text-amber-600 font-bold">{s.freeBags || 0}</td>
+                  <td className="p-2 text-right font-mono text-red-600 font-bold">{s.leakageBags || 0}</td>
                   <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
                   <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
                   <td className="p-2 text-center">
                     <button
+                      type="button"
                       onClick={() => setActiveReceiptSale(s)}
                       className="px-2 py-1 bg-[#EAF3F1] hover:bg-[#1C8C9E] hover:text-white rounded text-[#0B3B45] font-bold text-[10px] flex items-center justify-center gap-1 mx-auto"
                     >
-                      <Receipt size={12} /> Print Receipt
+                      <Receipt size={12} /> View
                     </button>
                   </td>
                 </tr>
@@ -2275,7 +2372,7 @@ function SalesModule({ data, mutate, session, showToast }) {
       {activeReceiptSale && (
         <ReceiptModal
           sale={activeReceiptSale}
-          companyName={data.settings.companyName}
+          companyName={data.settings?.companyName}
           driversList={driversList}
           onClose={() => setActiveReceiptSale(null)}
         />
@@ -2285,116 +2382,139 @@ function SalesModule({ data, mutate, session, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  REPORTS & DRIVER DASHBOARD MODULE                                     */
+/*  REPORTS MODULE                                                        */
 /* ---------------------------------------------------------------------- */
 function ReportsModule({ data, session }) {
-  const isDriver = session.role === "driver";
   const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
-  const [filterDriver, setFilterDriver] = useState(isDriver ? session.id : "all");
+  const [selectedDriverId, setSelectedDriverId] = useState("all");
 
-  const salesFiltered = useMemo(() => {
-    if (filterDriver === "all") return data.sales || [];
-    return (data.sales || []).filter((s) => s.driverId === filterDriver);
-  }, [data.sales, filterDriver]);
+  const isDriver = session.role === "driver";
+  const effectiveDriverId = isDriver ? session.id : selectedDriverId;
 
-  const metrics = useMemo(() => {
-    const todayStr = todayISO();
-    let totalBagsSold = 0;
-    let totalFreeBags = 0;
-    let totalRevenue = 0;
+  const filteredSales = useMemo(() => {
+    const list = data.sales || [];
+    if (effectiveDriverId === "all") return list;
+    if (effectiveDriverId === "factory") return list.filter((s) => !s.driverId);
+    return list.filter((s) => s.driverId === effectiveDriverId);
+  }, [data.sales, effectiveDriverId]);
 
-    salesFiltered.forEach((s) => {
-      if (s.date === todayStr) {
-        totalBagsSold += s.bagsSold || 0;
-        totalFreeBags += s.freeBags || 0;
-        totalRevenue += s.totalAmount || 0;
-      }
-    });
+  const totalBagsSold = useMemo(() => filteredSales.reduce((s, r) => s + (r.bagsSold || 0), 0), [filteredSales]);
+  const totalFreeBags = useMemo(() => filteredSales.reduce((s, r) => s + (r.freeBags || 0), 0), [filteredSales]);
+  const totalLeakageBags = useMemo(() => filteredSales.reduce((s, r) => s + (r.leakageBags || 0), 0), [filteredSales]);
+  const totalRevenue = useMemo(() => filteredSales.reduce((s, r) => s + (r.totalAmount || 0), 0), [filteredSales]);
 
-    return { totalBagsSold, totalFreeBags, totalRevenue };
-  }, [salesFiltered]);
+  const totalExpenses = useMemo(() => {
+    const m = (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+    const a = (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0);
+    return m + a;
+  }, [data.expenses, data.adminExpenses]);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Reports & Driver Operations</p>
-        <p className="text-sm text-[#5B6B68]">Inspect driver distribution, free bag summary, and sales metrics.</p>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <p className="font-display font-800 text-2xl text-[#0B3B45]">Operational & Sales Reports</p>
+          <p className="text-sm text-[#5B6B68]">Driver delivery summaries, overall revenue metrics, and performance analytics.</p>
+        </div>
+        <button onClick={() => window.print()} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E] no-print">
+          <Printer size={14} /> Print Report
+        </button>
       </div>
 
       {!isDriver && (
-        <div className="bg-white p-4 rounded-xl border border-[#DDE3DA] flex items-center gap-3 max-w-md">
-          <label className="text-xs font-bold text-gray-500 uppercase shrink-0">Filter Driver / Truck:</label>
-          <select value={filterDriver} onChange={(e) => setFilterDriver(e.target.value)} className="inp">
-            <option value="all">All Delivery Drivers & Factory Sales</option>
-            {driversList.map((d) => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
+        <div className="bg-white p-4 rounded-xl border border-[#DDE3DA] flex items-center gap-3">
+          <Truck size={18} className="text-[#0B3B45]" />
+          <div className="flex-1">
+            <label className="text-xs font-semibold text-gray-500 uppercase">Filter Sales by Driver Channel</label>
+            <select
+              value={selectedDriverId}
+              onChange={(e) => setSelectedDriverId(e.target.value)}
+              className="inp mt-1 max-w-sm"
+            >
+              <option value="all">All Sales (Factory Gate + All Delivery Drivers)</option>
+              <option value="factory">Direct Factory Gate Sales Only</option>
+              {driversList.map((d) => (
+                <option key={d.id} value={d.id}>{d.name} {d.truckNo ? `(${d.truckNo})` : ""}</option>
+              ))}
+            </select>
+          </div>
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-white p-4 rounded-2xl border border-[#DDE3DA]">
-          <p className="text-xs text-gray-500 font-semibold">Today's Bags Sold</p>
-          <p className="text-xl font-mono font-bold text-[#0B3B45] mt-1">{fmt(metrics.totalBagsSold, 0)} bags</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-[#DDE3DA]">
-          <p className="text-xs text-amber-700 font-semibold">Today's Free Bags Distributed</p>
-          <p className="text-xl font-mono font-bold text-amber-700 mt-1">{fmt(metrics.totalFreeBags, 0)} bags</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-[#DDE3DA]">
-          <p className="text-xs text-green-800 font-semibold">Today's Revenue Generated</p>
-          <p className="text-xl font-mono font-bold text-green-800 mt-1">{fmtGHS(metrics.totalRevenue)}</p>
-        </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard icon={PieChart} label="Total Gross Revenue" value={fmtGHS(totalRevenue)} accent="#2A6E4A" />
+        <StatCard icon={Droplets} label="Paid Sachet Bags Sold" value={`${fmt(totalBagsSold, 0)} bags`} accent="#0B3B45" />
+        <StatCard icon={Tag} label="Free / Courtesy Bags" value={`${fmt(totalFreeBags, 0)} bags`} accent="#E8A23D" />
+        <StatCard icon={AlertTriangle} label="Recorded Supply Leakages" value={`${fmt(totalLeakageBags, 0)} bags`} accent="#C4472F" />
       </div>
 
-      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Filtered Sales & Delivery Logs</p>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Date</th>
-              <th className="p-2">Customer</th>
-              <th className="p-2 text-right">Paid Bags</th>
-              <th className="p-2 text-right">Free Bags</th>
-              <th className="p-2 text-right">Total Revenue</th>
-              <th className="p-2">Recorded By</th>
-            </tr>
-          </thead>
-          <tbody>
-            {salesFiltered.map((s) => (
-              <tr key={s.id} className="border-t">
-                <td className="p-2 font-mono">{s.date}</td>
-                <td className="p-2 font-semibold">{s.customer}</td>
-                <td className="p-2 text-right font-mono font-bold">{s.bagsSold}</td>
-                <td className="p-2 text-right font-mono text-amber-600 font-bold">{s.freeBags || 0}</td>
-                <td className="p-2 text-right font-mono text-green-800 font-bold">{fmtGHS(s.totalAmount)}</td>
-                <td className="p-2">{s.recordedBy}</td>
+      <div id="printable-area" className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+        <div className="flex justify-between items-center border-b pb-2">
+          <p className="font-bold text-[#0B3B45] text-base">Driver & Channel Sales Ledger</p>
+          <p className="text-xs text-gray-500 font-mono">Records Count: {filteredSales.length}</p>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-[#F7F8F5] text-left">
+                <th className="p-2">Date</th>
+                <th className="p-2">Customer</th>
+                <th className="p-2">Driver / Truck</th>
+                <th className="p-2 text-right">Bags Sold</th>
+                <th className="p-2 text-right">Free Bags</th>
+                <th className="p-2 text-right">Leakage</th>
+                <th className="p-2 text-right">Gross Amount</th>
+                <th className="p-2">Payment Method</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredSales.length === 0 ? (
+                <tr><td colSpan="8" className="p-4 text-center text-gray-400">No sales transactions matched this filter.</td></tr>
+              ) : (
+                filteredSales.map((s) => {
+                  const drv = driversList.find((d) => d.id === s.driverId);
+                  return (
+                    <tr key={s.id} className="border-t">
+                      <td className="p-2 font-mono">{s.date}</td>
+                      <td className="p-2 font-semibold">{s.customer}</td>
+                      <td className="p-2 text-blue-900 font-semibold">{drv ? drv.name : "Factory Gate"}</td>
+                      <td className="p-2 text-right font-mono font-bold">{s.bagsSold}</td>
+                      <td className="p-2 text-right font-mono text-amber-600">{s.freeBags || 0}</td>
+                      <td className="p-2 text-right font-mono text-red-600">{s.leakageBags || 0}</td>
+                      <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
+                      <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  ADMIN & ROLES MANAGEMENT MODULE                                      */
+/*  ADMIN MANAGEMENT MODULE                                                */
 /* ---------------------------------------------------------------------- */
 function AdminManagementModule({ data, mutate, showToast }) {
+  const users = data.users || [];
+  const categories = data.expenseCategories || DEFAULT_EXPENSE_CATEGORIES;
+
   const [userName, setUserName] = useState("");
-  const [userRole, setUserRole] = useState("manager");
-  const [userEmail, setUserEmail] = useState("");
+  const [userRole, setUserRole] = useState("driver");
   const [userPassword, setUserPassword] = useState("123");
+  const [userEmail, setUserEmail] = useState("");
   const [truckNo, setTruckNo] = useState("");
 
-  const [priceInput, setPriceInput] = useState(String(data.settings.pricePerBag || 5.0));
-  const [newCatInput, setNewCatInput] = useState("");
+  const [unitPrice, setUnitPrice] = useState(data.settings?.pricePerBag || 5.0);
+  const [newCategory, setNewCategory] = useState("");
 
-  const handleAddUser = (e) => {
+  const handleCreateUser = (e) => {
     e.preventDefault();
-    if (!userName.trim()) return showToast("Enter user name", "warn");
+    if (!userName.trim()) return showToast("User name required!", "warn");
 
     const newUser = {
       id: uid(),
@@ -2408,160 +2528,178 @@ function AdminManagementModule({ data, mutate, showToast }) {
     mutate((prev) => ({
       ...prev,
       users: [...(prev.users || []), newUser],
-    }), "Created User Account", `Added ${userName} as ${userRole}`);
+    }), "Created System User", `${userName} (${userRole})`);
 
     setUserName(""); setUserEmail(""); setTruckNo(""); setUserPassword("123");
-    showToast("New User Account Created!");
+    showToast("System User Created Successfully!");
   };
 
-  const handleUpdatePrice = (e) => {
+  const handleDeleteUser = (userId) => {
+    if (users.length <= 1) return showToast("Cannot delete the only system user!", "warn");
+    if (window.confirm("Are you sure you want to remove this system account?")) {
+      mutate((prev) => ({
+        ...prev,
+        users: (prev.users || []).filter((u) => u.id !== userId),
+      }), "Deleted User", `User ID: ${userId}`);
+      showToast("User removed successfully.");
+    }
+  };
+
+  const handleSavePrice = (e) => {
     e.preventDefault();
-    const newPrice = Number(priceInput);
-    if (newPrice <= 0) return showToast("Price must be greater than zero!", "warn");
+    const val = Number(unitPrice);
+    if (val <= 0) return showToast("Price must be greater than zero!", "warn");
 
     mutate((prev) => ({
       ...prev,
-      settings: { ...prev.settings, pricePerBag: newPrice },
-    }), "Updated Price Config", `Set unit price per sachet bag to GH₵ ${newPrice}`);
+      settings: {
+        ...(prev.settings || {}),
+        pricePerBag: val,
+      },
+    }), "Updated Price Per Bag", `GH₵ ${val.toFixed(2)}`);
 
-    showToast("Sachet Bag Unit Price Updated!");
+    showToast("Unit Selling Price Saved!");
   };
 
   const handleAddCategory = (e) => {
     e.preventDefault();
-    if (!newCatInput.trim()) return;
+    if (!newCategory.trim()) return;
+
+    if (categories.includes(newCategory.trim())) {
+      return showToast("Category already exists!", "warn");
+    }
 
     mutate((prev) => ({
       ...prev,
-      expenseCategories: Array.from(new Set([...(prev.expenseCategories || []), newCatInput.trim()])),
-    }), "Added Expense Category", newCatInput.trim());
+      expenseCategories: [...(prev.expenseCategories || DEFAULT_EXPENSE_CATEGORIES), newCategory.trim()],
+    }), "Added Expense Category", newCategory.trim());
 
-    setNewCatInput("");
+    setNewCategory("");
     showToast("Expense Category Added!");
   };
 
-  const handleRemoveUser = (userId) => {
-    if (window.confirm("Are you sure you want to delete this user?")) {
+  const handleRemoveCategory = (cat) => {
+    if (window.confirm(`Remove category "${cat}"?`)) {
       mutate((prev) => ({
         ...prev,
-        users: (prev.users || []).filter((u) => u.id !== userId),
-      }), "Deleted User Account", `Removed user ID #${userId}`);
-      showToast("User account removed!");
+        expenseCategories: (prev.expenseCategories || []).filter((c) => c !== cat),
+      }), "Removed Expense Category", cat);
+      showToast("Category removed.");
     }
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin & Configuration</p>
-        <p className="text-sm text-[#5B6B68]">System settings, user role access, unit pricing, and expense categories.</p>
+        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin & Role Management</p>
+        <p className="text-sm text-[#5B6B68]">Manage accounts, price settings, and system expense categories.</p>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-4">
+        <form onSubmit={handleCreateUser} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <UserPlus className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Add New System Account</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Full Name *</label>
+            <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="e.g. Samuel Yaw" className="inp" required />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Assign Role</label>
+            <select value={userRole} onChange={(e) => setUserRole(e.target.value)} className="inp">
+              <option value="owner">Business Owner (Super Admin)</option>
+              <option value="manager">Manager</option>
+              <option value="cashier">Plant Cashier</option>
+              <option value="driver">Delivery Driver</option>
+            </select>
+          </div>
+
+          {userRole === "driver" && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Truck / Vehicle Reg No.</label>
+              <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. GT-1022-22" className="inp" />
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Email Address (Optional for Reset)</label>
+            <input type="email" value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="user@gmail.com" className="inp" />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Password</label>
+            <input type="text" value={userPassword} onChange={(e) => setUserPassword(e.target.value)} placeholder="123" className="inp" required />
+          </div>
+
+          <button type="submit" className="btn-primary w-full py-2"><Plus size={15} /> Create Account</button>
+        </form>
+
+        <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <p className="font-bold text-[#0B3B45] text-base border-b pb-2">Active Accounts & Access Control</p>
+          <div className="overflow-x-auto max-h-72">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-[#F7F8F5] text-left">
+                  <th className="p-2">Name</th>
+                  <th className="p-2">Role</th>
+                  <th className="p-2">Email / Truck</th>
+                  <th className="p-2 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id} className="border-t">
+                    <td className="p-2 font-semibold text-[#0B3B45]">{u.name}</td>
+                    <td className="p-2 uppercase font-mono text-[10px]"><span className="px-1.5 py-0.5 bg-gray-100 rounded">{u.role}</span></td>
+                    <td className="p-2 text-gray-500">{u.truckNo ? `Truck: ${u.truckNo}` : u.email || "N/A"}</td>
+                    <td className="p-2 text-right">
+                      <button onClick={() => handleDeleteUser(u.id)} className="text-red-600 hover:text-red-800 font-bold text-[11px]">
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        {/* User Account Creation */}
-        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
-          <p className="font-bold text-[#0B3B45]">Create System User Account</p>
-          <form onSubmit={handleAddUser} className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Full Name</label>
-              <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="e.g. John Doe" className="inp mt-1" required />
-            </div>
+        <form onSubmit={handleSavePrice} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Tag className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Global Price Configuration</p>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Unit Sale Price Per Sachet Bag (GH₵)</label>
+            <input type="number" min="0.1" step="0.5" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="inp" required />
+          </div>
+          <button type="submit" className="btn-primary w-full py-2">Update Bag Selling Price</button>
+        </form>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-xs font-semibold text-gray-500">Role</label>
-                <select value={userRole} onChange={(e) => setUserRole(e.target.value)} className="inp mt-1">
-                  <option value="owner">Business Owner</option>
-                  <option value="manager">Manager</option>
-                  <option value="cashier">Cashier</option>
-                  <option value="driver">Delivery Driver</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-500">Password</label>
-                <input type="text" value={userPassword} onChange={(e) => setUserPassword(e.target.value)} className="inp mt-1" required />
-              </div>
-            </div>
-
-            {userRole === "owner" && (
-              <div>
-                <label className="text-xs font-semibold text-gray-500">Admin Email Address (for recovery)</label>
-                <input type="email" value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="admin@domain.com" className="inp mt-1" />
-              </div>
-            )}
-
-            {userRole === "driver" && (
-              <div>
-                <label className="text-xs font-semibold text-gray-500">Truck / Vehicle Reg No.</label>
-                <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. GT-1022-22" className="inp mt-1" required />
-              </div>
-            )}
-
-            <button type="submit" className="btn-primary w-full mt-2">
-              <UserPlus size={15} /> Create User Account
-            </button>
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Settings2 className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Expense Categories Config</p>
+          </div>
+          <form onSubmit={handleAddCategory} className="flex gap-2">
+            <input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} placeholder="New Expense Name" className="inp" />
+            <button type="submit" className="btn-primary shrink-0 py-2">Add</button>
           </form>
-        </div>
 
-        {/* Global Price Setup & Expense Categories */}
-        <div className="space-y-4">
-          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-            <p className="font-bold text-[#0B3B45]">Global Price Setup</p>
-            <form onSubmit={handleUpdatePrice} className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-gray-500">Default Sachet Water Price per Bag (GH₵)</label>
-                <input type="number" step="0.5" min="0.5" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} className="inp mt-1" required />
-              </div>
-              <button type="submit" className="btn-primary w-full">Save New Unit Price</button>
-            </form>
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-            <p className="font-bold text-[#0B3B45]">Expense Categories</p>
-            <form onSubmit={handleAddCategory} className="flex gap-2">
-              <input value={newCatInput} onChange={(e) => setNewCatInput(e.target.value)} placeholder="New Category Name" className="inp" />
-              <button type="submit" className="btn-primary text-xs shrink-0"><Plus size={14} /> Add</button>
-            </form>
-            <div className="flex flex-wrap gap-1.5 pt-2">
-              {(data.expenseCategories || []).map((cat) => (
-                <span key={cat} className="px-2.5 py-1 bg-[#F7F8F5] border rounded-lg text-xs font-medium text-[#0B3B45] flex items-center gap-1">
-                  <Tag size={10} /> {cat}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Existing User Accounts Table */}
-      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">System Registered Accounts</p>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Name</th>
-              <th className="p-2">Role</th>
-              <th className="p-2">Email / Truck No</th>
-              <th className="p-2 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data.users || []).map((u) => (
-              <tr key={u.id} className="border-t">
-                <td className="p-2 font-semibold text-[#0B3B45]">{u.name}</td>
-                <td className="p-2 uppercase font-mono text-[10px]">{data.rolesConfig[u.role]?.label || u.role}</td>
-                <td className="p-2 font-mono text-gray-500">{u.email || u.truckNo || "N/A"}</td>
-                <td className="p-2 text-right">
-                  {u.role !== "owner" && (
-                    <button onClick={() => handleRemoveUser(u.id)} className="text-red-600 hover:text-red-800 p-1">
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </td>
-              </tr>
+          <div className="flex flex-wrap gap-1.5 pt-2 max-h-36 overflow-y-auto">
+            {categories.map((c) => (
+              <span key={c} className="px-2.5 py-1 bg-[#F7F8F5] border rounded-lg text-xs flex items-center gap-1.5">
+                <span>{c}</span>
+                <button type="button" onClick={() => handleRemoveCategory(c)} className="text-red-500 hover:text-red-700 font-bold text-xs">×</button>
+              </span>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </div>
       </div>
     </div>
   );
