@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { openDB } from 'https://unpkg.com';
 
 import { createClient } from '@supabase/supabase-js'
+
 import {
   Droplets, Warehouse, PackageOpen, Factory, Wallet, FileBarChart, ShieldCheck,
   LogOut, Plus, ChevronRight, AlertTriangle, CheckCircle2, Wifi, WifiOff,
   Users, Settings2, Scale, TrendingUp, TrendingDown, ClipboardList, X, Lock,
-  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building, DollarSign, RotateCcw, Trash2
+  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building, DollarSign, RotateCcw, Trash2, Sun, Moon, AlertCircle
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -35,7 +35,7 @@ async function syncToSupabase(data) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  PWA SERVICE WORKER REGISTRATION                                        */
+/*  PWA SERVICE WORKER REGISTRATION                                       */
 /* ---------------------------------------------------------------------- */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -44,6 +44,140 @@ if ("serviceWorker" in navigator) {
     });
   });
 }
+
+/* ---------------------------------------------------------------------- */
+/*  INDEXEDDB DATABASE SETUP                                              */
+/* ---------------------------------------------------------------------- */
+const DB_NAME = "pureledger_store";
+const STORE_NAME = "sync-queue";
+const BATCH_SIZE = 50;
+
+const dbPromise = openDB(DB_NAME, 1, {
+  upgrade(db) {
+    if (!db.objectStoreNames.contains(STORE_NAME)) {
+      db.createObjectStore(STORE_NAME, { keyPath: "id", autoIncrement: true });
+    }
+  },
+});
+
+/* ---------------------------------------------------------------------- */
+/*  AUTHENTICATION HELPERS                                                */
+/* ---------------------------------------------------------------------- */
+async function refreshAccessToken() {
+  const response = await fetch("/.netlify/functions/refresh-token-endpoint", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    localStorage.removeItem("user_access_jwt");
+    throw new Error("User refresh session fully expired. Redirecting to sign-in.");
+  }
+
+  const data = await response.json();
+  localStorage.setItem("user_access_jwt", data.accessToken);
+  return data.accessToken;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  NETWORK & BATCH HELPERS                                               */
+/* ---------------------------------------------------------------------- */
+async function sendBatchRecords(batch, token) {
+  return fetch("/.netlify/functions/sync-records-batch", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ records: batch }),
+  });
+}
+
+/* ---------------------------------------------------------------------- */
+/*  BATCH SYNCHRONIZATION ENGINE                                          */
+/* ---------------------------------------------------------------------- */
+let isSyncing = false;
+
+async function secureUploadLocalQueue() {
+  if (!navigator.onLine || isSyncing) return;
+
+  let userToken = localStorage.getItem("user_access_jwt");
+  if (!userToken) return;
+
+  isSyncing = true;
+
+  try {
+    const db = await dbPromise;
+    const records = await db.getAll(STORE_NAME);
+
+    if (!records.length) return;
+
+    for (let i = 0; i < records.length; i += BATCH_SIZE) {
+      const batch = records.slice(i, i + BATCH_SIZE);
+      let response = await sendBatchRecords(batch, userToken);
+
+      if (response.status === 401) {
+        const errorData = await response.json().catch(() => ({}));
+
+        if (errorData.error === "TokenExpired") {
+          console.log("Access token expired. Refreshing session...");
+          try {
+            userToken = await refreshAccessToken();
+            response = await sendBatchRecords(batch, userToken);
+          } catch (refreshErr) {
+            console.error("Critical: Session lost entirely.", refreshErr);
+            break;
+          }
+        }
+      }
+
+      if (response.ok || response.status === 202) {
+        const responseData = await response.json().catch(() => ({}));
+        const syncedIds = responseData.syncedIds || batch.map((item) => item.id);
+
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        for (const id of syncedIds) {
+          await tx.store.delete(id);
+        }
+        await tx.done;
+
+        console.log(`Batch sync successful: removed ${syncedIds.length} items from queue.`);
+      } else {
+        console.warn(`Batch sync failed with status ${response.status}. Retaining queue.`);
+        break;
+      }
+    }
+  } catch (err) {
+    console.error("Network error during batch sync:", err);
+  } finally {
+    isSyncing = false;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/*  LOCAL STORAGE & DEBOUNCED EVENT LISTENERS                              */
+/* ---------------------------------------------------------------------- */
+let syncDebounceTimer = null;
+
+function triggerDebouncedSync(delay = 2500) {
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => {
+    secureUploadLocalQueue();
+  }, delay);
+}
+
+async function saveToLocalQueue(data) {
+  const db = await dbPromise;
+  await db.add(STORE_NAME, {
+    ...data,
+    timestamp: Date.now(),
+  });
+
+  triggerDebouncedSync(500);
+}
+
+window.addEventListener("online", () => triggerDebouncedSync(2500));
 
 /* ---------------------------------------------------------------------- */
 /*  STORAGE ENGINE & DATA STRUCTURE                                        */
@@ -78,6 +212,7 @@ const emptyData = {
   debtPayments: [],
   expenses: [],
   adminExpenses: [],
+  expenseCategories: ["Raw Material", "Utilities", "Maintenance", "Transport & Fuel", "Salaries & Wages", "Tax & GRA", "General Admin", "Miscellaneous"],
   bankDeposits: [],
   notifications: [],
   settings: {
@@ -88,6 +223,7 @@ const emptyData = {
     lowStockFinishedBags: 500,
   },
   auditLog: [],
+  superAdminRegistered: false,
 };
 
 async function loadData() {
@@ -100,7 +236,8 @@ async function loadData() {
           ...emptyData,
           ...remote.data,
           settings: { ...emptyData.settings, ...(remote.data.settings || {}) },
-          businessDetails: { ...emptyData.businessDetails, ...(remote.data.businessDetails || {}) }
+          businessDetails: { ...emptyData.businessDetails, ...(remote.data.businessDetails || {}) },
+          expenseCategories: remote.data.expenseCategories || emptyData.expenseCategories
         };
       }
     } catch (e) {
@@ -116,7 +253,8 @@ async function loadData() {
       ...emptyData,
       ...parsed,
       settings: { ...emptyData.settings, ...(parsed.settings || {}) },
-      businessDetails: { ...emptyData.businessDetails, ...(parsed.businessDetails || {}) }
+      businessDetails: { ...emptyData.businessDetails, ...(parsed.businessDetails || {}) },
+      expenseCategories: parsed.expenseCategories || emptyData.expenseCategories
     };
   } catch {
     return emptyData;
@@ -140,7 +278,7 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const fmt = (n, d = 1) => Number(n || 0).toLocaleString("en-GH", { maximumFractionDigits: d, minimumFractionDigits: 0 });
 const fmtGHS = (n) => `GH₵ ${fmt(n, 2)}`;
 
-const ROLES = {
+const DEFAULT_ROLES = {
   owner: { label: "Business Owner", desc: "Full control · Financials · Price setup · Transfers", icon: ShieldCheck },
   manager: { label: "Manager", desc: "Operations · Production · Stock Acceptance", icon: Users },
   cashier: { label: "Cashier", desc: "Driver & Customer Sales Entry", icon: Wallet },
@@ -172,6 +310,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showBusinessModal, setShowBusinessModal] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
     loadData().then((d) => {
@@ -211,7 +350,8 @@ export default function App() {
             ].slice(0, 999),
           }
         : draft;
-      saveData(withAudit);
+
+      setTimeout(() => saveData(withAudit), 0);
       return withAudit;
     });
   }, [session]);
@@ -224,6 +364,29 @@ export default function App() {
     if (s.role === "owner" && !data.businessDetails?.isRegistered) {
       setShowBusinessModal(true);
     }
+  };
+
+  const handleRegisterSuperAdmin = (email, fullName, password) => {
+    const newAdmin = {
+      id: "u1",
+      name: fullName,
+      role: "owner",
+      password: password,
+      email: email.toLowerCase(),
+    };
+
+    setData((prev) => {
+      const updatedUsers = (prev.users || []).filter((u) => u.id !== "u1" && u.role !== "owner");
+      const nextData = {
+        ...prev,
+        superAdminRegistered: true,
+        users: [newAdmin, ...updatedUsers],
+      };
+      saveData(nextData);
+      return nextData;
+    });
+
+    showToast("Super Admin registered successfully! You can now log in.");
   };
 
   const handleResetAdminPassword = (emailInput, newPass) => {
@@ -272,15 +435,16 @@ export default function App() {
   if (!session) {
     return (
       <LoginScreen
-        users={data.users || []}
+        data={data}
         onLogin={handleLogin}
+        onRegisterSuperAdmin={handleRegisterSuperAdmin}
         onResetAdminPassword={handleResetAdminPassword}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F2F4EF] text-[#16211F] font-body">
+    <div className={`min-h-screen ${darkMode ? "bg-gray-900 text-gray-100 dark-mode" : "bg-[#F2F4EF] text-[#16211F]"} font-body transition-colors duration-200`}>
       <style dangerouslySetInnerHTML={{ __html: CSS_TOOLKIT }} />
       <div className="flex">
         <Sidebar
@@ -290,32 +454,42 @@ export default function App() {
           onLogout={() => setSession(null)}
           open={mobileNavOpen}
           onClose={() => setMobileNavOpen(false)}
+          darkMode={darkMode}
         />
         <div className="flex-1 min-w-0">
-          <TopBar session={session} online={online} onMenuClick={() => setMobileNavOpen(true)} onLogout={() => setSession(null)} data={data} mutate={mutate} />
+          <TopBar 
+            session={session} 
+            online={online} 
+            onMenuClick={() => setMobileNavOpen(true)} 
+            onLogout={() => setSession(null)} 
+            data={data} 
+            mutate={mutate} 
+            darkMode={darkMode} 
+            setDarkMode={setDarkMode} 
+          />
           <main className="p-4 sm:p-6 max-w-6xl mx-auto">
             {page === "dashboard" && (session.role === "owner" || session.role === "manager") && (
-              <Dashboard data={data} mutate={mutate} session={session} showToast={showToast} />
+              <Dashboard data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
             )}
             {page === "warehouse" && (session.role === "owner" || session.role === "manager") && (
-              <WarehouseModule data={data} mutate={mutate} session={session} showToast={showToast} />
+              <WarehouseModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
             )}
             {page === "packing" && (session.role === "owner" || session.role === "manager") && (
-              <PackingModule data={data} mutate={mutate} session={session} showToast={showToast} />
+              <PackingModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
             )}
             {page === "production" && (session.role === "owner" || session.role === "manager") && (
-              <ProductionModule data={data} mutate={mutate} session={session} showToast={showToast} />
+              <ProductionModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
             )}
             {page === "sales" && (session.role !== "driver") && (
-              <SalesModule data={data} mutate={mutate} session={session} showToast={showToast} />
+              <SalesModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
             )}
             {page === "reports" && (
-              <ReportsModule data={data} session={session} />
+              <ReportsModule data={data} session={session} darkMode={darkMode} />
             )}
             {page === "admin" && session.role === "owner" && (
-              <AdminManagementModule data={data} mutate={mutate} showToast={showToast} />
+              <AdminManagementModule data={data} mutate={mutate} showToast={showToast} darkMode={darkMode} />
             )}
-            {page === "audit" && session.role === "owner" && <AuditLog data={data} mutate={mutate} showToast={showToast} />}
+            {page === "audit" && session.role === "owner" && <AuditLog data={data} mutate={mutate} showToast={showToast} darkMode={darkMode} />}
           </main>
         </div>
       </div>
@@ -345,6 +519,17 @@ const CSS_TOOLKIT = `
 .inp { width:100%; padding:0.55rem 0.75rem; border-radius:0.5rem; border:1px solid #DDE3DA; font-size:0.875rem; font-family:'IBM Plex Sans',sans-serif; outline:none; background:#FFFFFF; color:#16211F; }
 .inp:focus { border-color:#1C8C9E; box-shadow:0 0 0 3px rgba(28,140,158,0.15); }
 .inp:disabled { background:#E9ECE6; cursor:not-allowed; }
+
+.dark-mode .inp { background:#1F2937; border-color:#374151; color:#F9FAFB; }
+.dark-mode .inp:disabled { background:#111827; }
+.dark-mode .bg-white { background-color:#1F2937 !important; border-color:#374151 !important; color:#F9FAFB !important; }
+.dark-mode .bg-\[\#F2F4EF\] { background-color:#111827 !important; }
+.dark-mode .bg-\[\#F7F8F5\] { background-color:#374151 !important; color:#F9FAFB !important; }
+.dark-mode .text-\[\#0B3B45\] { color:#6EE7B7 !important; }
+.dark-mode .text-\[\#16211F\] { color:#F9FAFB !important; }
+.dark-mode .text-\[\#5B6B68\] { color:#9CA3AF !important; }
+.dark-mode .border-\[\#DDE3DA\] { border-color:#374151 !important; }
+
 .btn-primary { display:flex; align-items:center; justify-content:center; gap:0.4rem; background:#0B3B45; color:#F2F4EF; font-weight:600; font-size:0.875rem; padding:0.6rem 1rem; border-radius:0.5rem; transition:filter 0.15s; border:none; cursor:pointer; }
 .btn-primary:hover { filter:brightness(1.15); }
 .btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
@@ -360,7 +545,7 @@ const CSS_TOOLKIT = `
 @media print {
   body * { visibility: hidden; }
   #printable-area, #printable-area *, #printable-receipt, #printable-receipt * { visibility: visible; }
-  #printable-area { position: absolute; left: 0; top: 0; width: 100%; }
+  #printable-area { position: absolute; left: 0; top: 0; width: 100%; color: black !important; background: white !important; }
   #printable-receipt { position: absolute; left: 0; top: 0; width: 100%; max-width: 320px; margin: 0 auto; padding: 10px; background: white; color: black; }
   .no-print { display: none !important; }
 }
@@ -369,13 +554,20 @@ const CSS_TOOLKIT = `
 /* ---------------------------------------------------------------------- */
 /*  LOGIN SCREEN                                                           */
 /* ---------------------------------------------------------------------- */
-function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
-  const [view, setView] = useState("login");
+function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword }) {
+  const users = data.users || [];
+  const superAdminRegistered = data.superAdminRegistered;
+
+  const [view, setView] = useState(!superAdminRegistered ? "register" : "login");
   const [selectedUser, setSelectedUser] = useState(users[0] || null);
   const [password, setPassword] = useState("");
   const [fullNameInput, setFullNameInput] = useState("");
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+
+  const [regEmail, setRegEmail] = useState("");
+  const [regFullName, setRegFullName] = useState("");
+  const [regPassword, setRegPassword] = useState("");
 
   const [resetEmail, setResetEmail] = useState("");
   const [resetPassword, setResetPassword] = useState("");
@@ -385,6 +577,21 @@ function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
       setSelectedUser(users[0]);
     }
   }, [users, selectedUser]);
+
+  const handleRegisterSubmit = (e) => {
+    e.preventDefault();
+    if (regPassword.length < 6) {
+      setError("Password must be at least 6 characters long.");
+      return;
+    }
+    if (!regEmail.includes("@")) {
+      setError("Please provide a valid email address.");
+      return;
+    }
+    onRegisterSuperAdmin(regEmail, regFullName, regPassword);
+    setView("login");
+    setError("");
+  };
 
   const handleLoginSubmit = (e) => {
     e.preventDefault();
@@ -438,6 +645,57 @@ function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
           </div>
         </div>
 
+        {view === "register" && (
+          <form onSubmit={handleRegisterSubmit} className="space-y-3">
+            <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
+              <p className="text-xs font-bold text-[#0B3B45]">One-Time Super Admin Registration</p>
+              <p className="text-[11px] text-[#5B6B68]">Set up your primary owner account to manage system roles, expenses, and operations.</p>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Full Name</label>
+              <input
+                type="text"
+                value={regFullName}
+                onChange={(e) => { setRegFullName(e.target.value); setError(""); }}
+                placeholder="e.g. Emmanuel Mensah"
+                className="inp mt-1"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Email Address</label>
+              <input
+                type="email"
+                value={regEmail}
+                onChange={(e) => { setRegEmail(e.target.value); setError(""); }}
+                placeholder="admin@mattbeeswater.com"
+                className="inp mt-1"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Password (min 6 characters)</label>
+              <input
+                type="password"
+                value={regPassword}
+                onChange={(e) => { setRegPassword(e.target.value); setError(""); }}
+                placeholder="••••••••"
+                className="inp mt-1"
+                required
+              />
+            </div>
+
+            {error && <p className="text-xs font-semibold text-[#C4472F]">{error}</p>}
+
+            <button type="submit" className="btn-primary w-full py-2.5 mt-2">
+              Register Super Admin Account
+            </button>
+          </form>
+        )}
+
         {view === "login" && (
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
@@ -456,7 +714,7 @@ function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
               >
                 {users.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {ROLES[u.role]?.label || u.role} ({u.name})
+                    {DEFAULT_ROLES[u.role]?.label || u.role} ({u.name})
                   </option>
                 ))}
               </select>
@@ -530,7 +788,7 @@ function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
                 type="password"
                 value={resetPassword}
                 onChange={(e) => setResetPassword(e.target.value)}
-                placeholder="Set new password"
+                placeholder="Set new password (min 6 chars)"
                 className="inp mt-1"
                 required
               />
@@ -621,7 +879,7 @@ function BusinessDetailsModal({ initialDetails, onSave, onSkip }) {
 /* ---------------------------------------------------------------------- */
 /*  NAVIGATION / SIDEBAR & TOPBAR                                           */
 /* ---------------------------------------------------------------------- */
-function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
+function Sidebar({ page, setPage, role, onLogout, open, onClose, darkMode }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: Factory, roles: ["owner", "manager"] },
     { id: "warehouse", label: "Warehouse & Rolls", icon: Warehouse, roles: ["owner", "manager"] },
@@ -665,8 +923,8 @@ function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
   );
 }
 
-function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
-  const Icon = ROLES[session.role]?.icon || ShieldCheck;
+function TopBar({ session, online, onMenuClick, onLogout, data, mutate, darkMode, setDarkMode }) {
+  const Icon = DEFAULT_ROLES[session.role]?.icon || ShieldCheck;
   const [notifOpen, setNotifOpen] = useState(false);
   const notifications = data.notifications || [];
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -682,9 +940,9 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
   };
 
   return (
-    <div className="sticky top-0 z-20 bg-[#F2F4EF] border-b border-[#DDE3DA] px-4 sm:px-6 py-3 flex items-center justify-between">
+    <div className={`sticky top-0 z-20 ${darkMode ? "bg-gray-800 border-gray-700" : "bg-[#F2F4EF] border-[#DDE3DA]"} border-b px-4 sm:px-6 py-3 flex items-center justify-between`}>
       <div className="flex items-center gap-2.5">
-        <button onClick={onMenuClick} className="sm:hidden w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#0B3B45]">
+        <button onClick={onMenuClick} className={`sm:hidden w-8 h-8 rounded-lg border ${darkMode ? "border-gray-700 bg-gray-800 text-gray-200" : "border-[#DDE3DA] bg-white text-[#0B3B45]"} flex items-center justify-center`}>
           <Menu size={16} />
         </button>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold ${online ? "bg-[#DCEEE4] text-[#2A6E4A]" : "bg-[#F5E3D9] text-[#A85A2A]"}`}>
@@ -693,15 +951,23 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <button 
+          onClick={() => setDarkMode(!darkMode)} 
+          className={`w-8 h-8 rounded-lg border ${darkMode ? "border-gray-700 bg-gray-800 text-yellow-400" : "border-[#DDE3DA] bg-white text-gray-600"} flex items-center justify-center transition`}
+          title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+        >
+          {darkMode ? <Sun size={15} /> : <Moon size={15} />}
+        </button>
+
         <div className="text-right hidden sm:block">
           <p className="text-sm font-semibold">{session.name}</p>
-          <p className="text-[11px] text-[#5B6B68]">{ROLES[session.role]?.label || session.role}</p>
+          <p className="text-[11px] text-[#5B6B68]">{DEFAULT_ROLES[session.role]?.label || session.role}</p>
         </div>
         <div className="w-8 h-8 rounded-full bg-[#0B3B45] flex items-center justify-center text-white">
           <Icon size={14} />
         </div>
         <div className="relative">
-          <button onClick={handleOpenNotifications} className="relative w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#0B3B45]">
+          <button onClick={handleOpenNotifications} className={`relative w-8 h-8 rounded-lg border ${darkMode ? "border-gray-700 bg-gray-800 text-gray-200" : "border-[#DDE3DA] bg-white text-[#0B3B45]"} flex items-center justify-center`}>
             <Bell size={15} />
             {unreadCount > 0 && (
               <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold bg-[#C4472F] text-white flex items-center justify-center">
@@ -710,20 +976,20 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
             )}
           </button>
           {notifOpen && (
-            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-[#DDE3DA] shadow-xl z-50 p-3">
-              <div className="flex items-center justify-between pb-2 border-b border-[#EDEFEA]">
+            <div className={`absolute right-0 mt-2 w-80 ${darkMode ? "bg-gray-800 border-gray-700" : "bg-white border-[#DDE3DA]"} rounded-xl border shadow-xl z-50 p-3`}>
+              <div className="flex items-center justify-between pb-2 border-b border-gray-200 dark:border-gray-700">
                 <p className="font-bold text-xs text-[#0B3B45]">System Notifications</p>
                 <button onClick={() => mutate((prev) => ({ ...prev, notifications: [] }), "Cleared Notifications", "")} className="text-[10px] text-[#C4472F]">Clear All</button>
               </div>
               <div className="max-h-60 overflow-y-auto space-y-2 mt-2">
                 {notifications.length === 0 ? <p className="text-xs text-gray-400 text-center py-4">No notifications</p> : (
                   notifications.map((n) => (
-                    <div key={n.id} className="p-2 bg-[#F7F8F5] rounded text-xs border border-[#EDEFEA] relative">
+                    <div key={n.id} className={`p-2 ${darkMode ? "bg-gray-700 border-gray-600" : "bg-[#F7F8F5] border-[#EDEFEA]"} rounded text-xs border relative`}>
                       <div className="flex justify-between items-center">
                         <p className="font-semibold text-[#0B3B45]">{n.title}</p>
                         <span className="text-[9px] text-green-700 font-bold bg-green-100 px-1.5 py-0.5 rounded">Read</span>
                       </div>
-                      <p className="text-gray-600 mt-1">{n.msg}</p>
+                      <p className="text-gray-600 dark:text-gray-300 mt-1">{n.msg}</p>
                       <span className="text-[9px] text-gray-400 font-mono mt-1 block">{n.ts}</span>
                     </div>
                   ))
@@ -732,7 +998,7 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
             </div>
           )}
         </div>
-        <button onClick={onLogout} className="w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#C4472F]">
+        <button onClick={onLogout} className={`w-8 h-8 rounded-lg border ${darkMode ? "border-gray-700 bg-gray-800" : "border-[#DDE3DA] bg-white"} flex items-center justify-center text-[#C4472F]`}>
           <LogOut size={15} />
         </button>
       </div>
@@ -746,17 +1012,19 @@ function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
 function computeFinishedGoods(data) {
   const produced = (data.productionRuns || []).reduce((s, r) => s + (r.netAvailableBags || 0), 0);
   const sold = (data.sales || []).reduce((s, r) => s + (r.bagsSold || 0), 0);
+  const freeGiveaway = (data.sales || []).reduce((s, r) => s + (r.freeBags || 0), 0);
   return {
     totalProduced: produced,
     totalSold: sold,
-    availableForSale: Math.max(0, produced - sold),
+    totalFree: freeGiveaway,
+    availableForSale: Math.max(0, produced - sold - freeGiveaway),
   };
 }
 
 function computeManagerAcceptedRolls(data) {
-  const accepted = (data.issuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.weightKg || 0), 0);
-  const used = (data.productionRuns || []).reduce((s, p) => s + (p.weightUsedKg || 0), 0);
-  return Math.max(0, accepted - used);
+  const acceptedRolls = (data.issuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.physicalCount || i.qty || 0), 0);
+  const usedRolls = (data.productionRuns || []).reduce((s, p) => s + (p.rollsUsed || 0), 0);
+  return Math.max(0, acceptedRolls - usedRolls);
 }
 
 function computeManagerAcceptedBags(data) {
@@ -775,9 +1043,168 @@ function computeCashBalance(data) {
 }
 
 /* ---------------------------------------------------------------------- */
+/*  ADMIN MANAGEMENT & ROLE CREATION MODULE                               */
+/* ---------------------------------------------------------------------- */
+function AdminManagementModule({ data, mutate, showToast, darkMode }) {
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState("manager");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [customRoleLabel, setCustomRoleLabel] = useState("");
+  
+  const [newCategoryName, setNewCategoryName] = useState("");
+
+  const handleAddUser = (e) => {
+    e.preventDefault();
+    if (!newUserName.trim() || !newUserPassword) {
+      return showToast("Name and Password are required!", "warn");
+    }
+    if (newUserPassword.length < 6) {
+      return showToast("Password must be at least 6 characters!", "warn");
+    }
+
+    const newUser = {
+      id: uid(),
+      name: newUserName.trim(),
+      role: newUserRole,
+      password: newUserPassword,
+      email: newUserEmail.trim().toLowerCase(),
+    };
+
+    mutate((prev) => ({
+      ...prev,
+      users: [...(prev.users || []), newUser],
+    }), "Added User", `Added ${newUserName} as ${newUserRole}`);
+
+    setNewUserName(""); setNewUserEmail(""); setNewUserPassword("");
+    showToast("User Account Created Successfully!");
+  };
+
+  const handleAddExpenseCategory = (e) => {
+    e.preventDefault();
+    if (!newCategoryName.trim()) return;
+
+    if ((data.expenseCategories || []).includes(newCategoryName.trim())) {
+      return showToast("Category already exists!", "warn");
+    }
+
+    mutate((prev) => ({
+      ...prev,
+      expenseCategories: [...(prev.expenseCategories || []), newCategoryName.trim()],
+    }), "Added Expense Category", newCategoryName.trim());
+
+    setNewCategoryName("");
+    showToast("Expense Category Added!");
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin & User Management</p>
+        <p className="text-sm text-[#5B6B68]">Add system users, assign roles manually, and configure expense categories.</p>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+          <p className="font-bold text-[#0B3B45] text-base">Add New User / Manual Role Assignment</p>
+          <form onSubmit={handleAddUser} className="space-y-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Full Name *</label>
+              <input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} placeholder="e.g. John Doe" className="inp mt-1" required />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Email Address (Optional)</label>
+              <input type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} placeholder="john@pureledger.com" className="inp mt-1" />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Assign System Role *</label>
+              <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)} className="inp mt-1">
+                <option value="owner">Business Owner (Super Admin)</option>
+                <option value="manager">Manager</option>
+                <option value="cashier">Cashier</option>
+                <option value="driver">Delivery Driver</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Password (min 6 characters) *</label>
+              <input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} placeholder="••••••••" className="inp mt-1" required />
+            </div>
+
+            <button type="submit" className="btn-primary w-full py-2.5">
+              <Plus size={16} /> Create User Account
+            </button>
+          </form>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+          <p className="font-bold text-[#0B3B45] text-base">Expense Categories Management</p>
+          <form onSubmit={handleAddExpenseCategory} className="flex gap-2">
+            <input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Electricity & Water" className="inp" required />
+            <button type="submit" className="btn-primary shrink-0 py-2">Add Category</button>
+          </form>
+
+          <div className="mt-3 space-y-1.5 max-h-56 overflow-y-auto">
+            {(data.expenseCategories || []).map((cat, idx) => (
+              <div key={idx} className="flex justify-between items-center p-2 bg-[#F7F8F5] dark:bg-gray-700 rounded text-xs">
+                <span className="font-semibold text-gray-700 dark:text-gray-200">{cat}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+        <p className="font-bold text-[#0B3B45] mb-3 text-base">Registered System Users</p>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-[#F7F8F5] text-left">
+              <th className="p-2">Name</th>
+              <th className="p-2">Email</th>
+              <th className="p-2">Assigned Role</th>
+              <th className="p-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data.users || []).map((u) => (
+              <tr key={u.id} className="border-t">
+                <td className="p-2 font-bold text-[#0B3B45]">{u.name}</td>
+                <td className="p-2 font-mono text-gray-500">{u.email || "N/A"}</td>
+                <td className="p-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-800">
+                    {DEFAULT_ROLES[u.role]?.label || u.role}
+                  </span>
+                </td>
+                <td className="p-2 text-right">
+                  {u.id !== "u1" && (
+                    <button 
+                      onClick={() => {
+                        if (window.confirm(`Delete user ${u.name}?`)) {
+                          mutate((prev) => ({ ...prev, users: (prev.users || []).filter((x) => x.id !== u.id) }), "Deleted User", u.name);
+                          showToast("User removed!");
+                        }
+                      }} 
+                      className="text-red-600 hover:text-red-800"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
 /*  AUDIT LOG COMPONENT                                                   */
 /* ---------------------------------------------------------------------- */
-function AuditLog({ data, mutate, showToast }) {
+function AuditLog({ data, mutate, showToast, darkMode }) {
   const logs = data.auditLog || [];
 
   const handleResetAuditLog = () => {
@@ -835,7 +1262,7 @@ function AuditLog({ data, mutate, showToast }) {
                   <td className="p-2 font-semibold text-[#0B3B45]">{log.user}</td>
                   <td className="p-2 uppercase text-[10px] font-mono">{log.role}</td>
                   <td className="p-2 font-bold text-blue-900">{log.action}</td>
-                  <td className="p-2 text-gray-600">{log.detail}</td>
+                  <td className="p-2 text-gray-600 dark:text-gray-300">{log.detail}</td>
                 </tr>
               ))
             )}
@@ -849,19 +1276,22 @@ function AuditLog({ data, mutate, showToast }) {
 /* ---------------------------------------------------------------------- */
 /*  DASHBOARD MODULE                                                        */
 /* ---------------------------------------------------------------------- */
-function Dashboard({ data, mutate, session, showToast }) {
+function Dashboard({ data, mutate, session, showToast, darkMode }) {
   const isOwner = session.role === "owner";
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
-  const managerRollsKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
+  const managerRollsCount = useMemo(() => computeManagerAcceptedRolls(data), [data]);
   const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
   const cashOnHand = useMemo(() => computeCashBalance(data), [data]);
 
   const managersList = useMemo(() => (data.users || []).filter((u) => u.role === "manager"), [data.users]);
+  const categories = data.expenseCategories || ["Raw Material", "Utilities", "Maintenance", "Transport & Fuel", "Salaries & Wages", "Tax & GRA", "General Admin", "Miscellaneous"];
 
   const [expenseDesc, setExpenseDesc] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState(categories[0] || "General Admin");
   const [expenseAmt, setExpenseAmt] = useState("");
 
   const [adminExpenseDesc, setAdminExpenseDesc] = useState("");
+  const [adminExpenseCategory, setAdminExpenseCategory] = useState(categories[0] || "General Admin");
   const [adminExpenseAmt, setAdminExpenseAmt] = useState("");
 
   const handleLogExpense = (e) => {
@@ -874,13 +1304,14 @@ function Dashboard({ data, mutate, session, showToast }) {
         {
           id: uid(),
           date: todayISO(),
+          category: expenseCategory,
           description: expenseDesc,
           amount: Number(expenseAmt),
           recordedBy: session.name,
         },
         ...(prev.expenses || []),
       ],
-    }), "Logged Expense", `GH₵ ${expenseAmt} for ${expenseDesc}`);
+    }), "Logged Expense", `GH₵ ${expenseAmt} for ${expenseDesc} (${expenseCategory})`);
 
     setExpenseDesc(""); setExpenseAmt("");
     showToast("Manager Expense Recorded!");
@@ -896,13 +1327,14 @@ function Dashboard({ data, mutate, session, showToast }) {
         {
           id: uid(),
           date: todayISO(),
+          category: adminExpenseCategory,
           description: adminExpenseDesc,
           amount: Number(adminExpenseAmt),
           recordedBy: session.name,
         },
         ...(prev.adminExpenses || []),
       ],
-    }), "Logged Admin Expense", `GH₵ ${adminExpenseAmt} for ${adminExpenseDesc}`);
+    }), "Logged Admin Expense", `GH₵ ${adminExpenseAmt} for ${adminExpenseDesc} (${adminExpenseCategory})`);
 
     setAdminExpenseDesc(""); setAdminExpenseAmt("");
     showToast("Admin Expense Recorded & Balanced!");
@@ -924,11 +1356,24 @@ function Dashboard({ data, mutate, session, showToast }) {
   const totalAdminExpensesGHS = useMemo(() => (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.adminExpenses]);
   const totalAllExpensesGHS = totalManagerExpensesGHS + totalAdminExpensesGHS;
 
+  const expensesByCategory = useMemo(() => {
+    const combined = [
+      ...(data.expenses || []),
+      ...(data.adminExpenses || []),
+    ];
+    const grouped = {};
+    combined.forEach((e) => {
+      const cat = e.category || "General Admin";
+      grouped[cat] = (grouped[cat] || 0) + (e.amount || 0);
+    });
+    return grouped;
+  }, [data.expenses, data.adminExpenses]);
+
   const managerMetrics = useMemo(() => {
     return managersList.map((mgr) => {
       const runs = (data.productionRuns || []).filter((r) => r.recordedBy === mgr.name);
+      const rollsCountUsed = runs.reduce((s, r) => s + (r.rollsUsed || 0), 0);
       const rollKgUsed = runs.reduce((s, r) => s + (r.weightUsedKg || 0), 0);
-      const rollsCountUsed = Math.round(rollKgUsed / 25);
 
       const bagUsages = (data.bagUsage || []).filter((u) => u.usedBy === mgr.name);
       const bagsUsedQty = bagUsages.reduce((s, u) => s + (u.qty || 0), 0);
@@ -942,8 +1387,8 @@ function Dashboard({ data, mutate, session, showToast }) {
 
       return {
         managerName: mgr.name,
-        rollKgUsed,
         rollsCountUsed,
+        rollKgUsed,
         bagsUsedQty,
         factorySalesBags,
         factorySalesGHS,
@@ -961,7 +1406,7 @@ function Dashboard({ data, mutate, session, showToast }) {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard icon={Droplets} label="Sachet Bags Produce (Available)" value={`${fmt(finished.availableForSale, 0)} bags`} accent="#2A6E4A" />
-        <StatCard icon={Warehouse} label="Manager Floor Rolls" value={`${fmt(managerRollsKg)} kg`} accent="#1C8C9E" />
+        <StatCard icon={Warehouse} label="Manager Floor Rolls" value={`${fmt(managerRollsCount, 0)} rolls`} accent="#1C8C9E" />
         <StatCard icon={PackageOpen} label="Manager Packing Bags" value={`${fmt(managerBagsQty, 0)} pcs`} accent="#E8A23D" />
         <StatCard icon={Wallet} label="Cash On Hand Balance" value={fmtGHS(cashOnHand)} accent={cashOnHand < 0 ? "#C4472F" : "#0B3B45"} />
       </div>
@@ -976,6 +1421,14 @@ function Dashboard({ data, mutate, session, showToast }) {
               </div>
               <form onSubmit={handleLogAdminExpense} className="space-y-3">
                 <div>
+                  <label className="text-xs font-semibold text-gray-500">Expense Category</label>
+                  <select value={adminExpenseCategory} onChange={(e) => setAdminExpenseCategory(e.target.value)} className="inp">
+                    {categories.map((c, i) => (
+                      <option key={i} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
                   <label className="text-xs font-semibold text-gray-500">Expense Description</label>
                   <input value={adminExpenseDesc} onChange={(e) => setAdminExpenseDesc(e.target.value)} placeholder="e.g. Executive travel / GRA Tax" className="inp" required />
                 </div>
@@ -988,29 +1441,28 @@ function Dashboard({ data, mutate, session, showToast }) {
             </div>
 
             <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-              <p className="font-bold text-[#0B3B45] text-base">All Expenses Balancing & Automated Expense Ledger</p>
-              <div className="grid sm:grid-cols-3 gap-3">
-                <div className="p-3 bg-[#F7F8F5] rounded-xl border border-[#EDEFEA]">
-                  <p className="text-[11px] font-semibold text-gray-500">Manager Expenses</p>
-                  <p className="text-lg font-mono font-bold text-[#0B3B45] mt-1">{fmtGHS(totalManagerExpensesGHS)}</p>
-                </div>
-                <div className="p-3 bg-[#EAF3F1] rounded-xl border border-[#BFDCD6]">
-                  <p className="text-[11px] font-semibold text-[#0B3B45]">Admin Expenses</p>
-                  <p className="text-lg font-mono font-bold text-[#1C8C9E] mt-1">{fmtGHS(totalAdminExpensesGHS)}</p>
-                </div>
-                <div className="p-3 bg-[#FBEAE5] rounded-xl border border-[#EFC3B7]">
-                  <p className="text-[11px] font-semibold text-[#C4472F]">Total System Expenses</p>
-                  <p className="text-lg font-mono font-bold text-[#C4472F] mt-1">{fmtGHS(totalAllExpensesGHS)}</p>
-                </div>
+              <p className="font-bold text-[#0B3B45] text-base">Grouped Expenses by Category</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {Object.entries(expensesByCategory).map(([cat, amount], idx) => (
+                  <div key={idx} className="p-2.5 bg-[#F7F8F5] dark:bg-gray-700 rounded-xl border border-[#EDEFEA] dark:border-gray-600">
+                    <p className="text-[10px] font-bold text-gray-500 dark:text-gray-300 uppercase truncate">{cat}</p>
+                    <p className="text-sm font-mono font-bold text-[#0B3B45] mt-0.5">{fmtGHS(amount)}</p>
+                  </div>
+                ))}
               </div>
 
-              <div className="overflow-x-auto max-h-44 mt-2">
+              <div className="pt-2 border-t flex justify-between items-center text-xs font-bold">
+                <span>Total Expenses (Manager + Admin):</span>
+                <span className="text-red-600 font-mono text-sm">{fmtGHS(totalAllExpensesGHS)}</span>
+              </div>
+
+              <div className="overflow-x-auto max-h-36 mt-2">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-[#F7F8F5] text-left">
                       <th className="p-2">Date</th>
                       <th className="p-2">Category</th>
-                      <th className="p-2">Recorded By</th>
+                      <th className="p-2">Type</th>
                       <th className="p-2">Description</th>
                       <th className="p-2 text-right">Amount</th>
                     </tr>
@@ -1022,12 +1474,12 @@ function Dashboard({ data, mutate, session, showToast }) {
                     ].sort((a, b) => new Date(b.date) - new Date(a.date)).map((e) => (
                       <tr key={e.id} className="border-t">
                         <td className="p-2 font-mono">{e.date}</td>
+                        <td className="p-2 font-semibold">{e.category || "General Admin"}</td>
                         <td className="p-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${e.type === "Admin" ? "bg-cyan-100 text-cyan-800" : "bg-gray-100 text-gray-800"}`}>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${e.type === "Admin" ? "bg-cyan-100 text-cyan-800" : "bg-gray-100 text-gray-800"}`}>
                             {e.type}
                           </span>
                         </td>
-                        <td className="p-2 font-semibold text-blue-900">{e.recordedBy}</td>
                         <td className="p-2">{e.description}</td>
                         <td className="p-2 text-right font-mono font-bold text-red-700">{fmtGHS(e.amount)}</td>
                       </tr>
@@ -1067,7 +1519,7 @@ function Dashboard({ data, mutate, session, showToast }) {
                 <thead>
                   <tr className="bg-[#F7F8F5] text-left">
                     <th className="p-2">Manager Name</th>
-                    <th className="p-2 text-right">Rolls Used (approx pcs)</th>
+                    <th className="p-2 text-right">Rolls Used (pcs)</th>
                     <th className="p-2 text-right">Rolls Used (kg)</th>
                     <th className="p-2 text-right">Packing Bags Used (pcs)</th>
                     <th className="p-2 text-right">Factory Direct Sales (Bags)</th>
@@ -1079,7 +1531,7 @@ function Dashboard({ data, mutate, session, showToast }) {
                   {managerMetrics.map((m, idx) => (
                     <tr key={idx} className="border-t">
                       <td className="p-2 font-bold text-[#0B3B45]">{m.managerName}</td>
-                      <td className="p-2 text-right font-mono">{m.rollsCountUsed} rolls</td>
+                      <td className="p-2 text-right font-mono font-bold">{m.rollsCountUsed} rolls</td>
                       <td className="p-2 text-right font-mono">{m.rollKgUsed} kg</td>
                       <td className="p-2 text-right font-mono">{m.bagsUsedQty} pcs</td>
                       <td className="p-2 text-right font-mono font-bold text-blue-900">{m.factorySalesBags} bags</td>
@@ -1100,6 +1552,14 @@ function Dashboard({ data, mutate, session, showToast }) {
               <p className="font-bold text-[#0B3B45]">Record Operational Expense (Manager Entry)</p>
             </div>
             <div>
+              <label className="text-xs font-semibold text-gray-500">Expense Category</label>
+              <select value={expenseCategory} onChange={(e) => setExpenseCategory(e.target.value)} className="inp">
+                {categories.map((c, i) => (
+                  <option key={i} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
               <label className="text-xs font-semibold text-gray-500">Expense Description</label>
               <input value={expenseDesc} onChange={(e) => setExpenseDesc(e.target.value)} placeholder="e.g. Factory fuel / generator maintenance" className="inp" required />
             </div>
@@ -1110,9 +1570,9 @@ function Dashboard({ data, mutate, session, showToast }) {
             <button type="submit" className="btn-primary w-full">Log Expense to Admin</button>
           </form>
 
-          <div className="bg-[#EAF3F1] p-4 rounded-xl border border-[#BFDCD6]">
+          <div className="bg-[#EAF3F1] dark:bg-gray-800 p-4 rounded-xl border border-[#BFDCD6] dark:border-gray-700">
             <p className="font-bold text-sm text-[#0B3B45]">Notice to Manager:</p>
-            <p className="text-xs text-[#5B6B68] mt-1">Raw material intake is controlled by the Owner. Rolls and Packing Bags issued to you require explicit physical confirmation before being released to production.</p>
+            <p className="text-xs text-[#5B6B68] mt-1">Raw material intake is controlled by the Owner. Rolls and Packing Bags issued to you require explicit physical count acceptance before being available for production.</p>
           </div>
         </div>
       )}
@@ -1135,7 +1595,7 @@ function StatCard({ icon: Icon, label, value, accent }) {
 /* ---------------------------------------------------------------------- */
 /*  WAREHOUSE & ROLLS MODULE                                               */
 /* ---------------------------------------------------------------------- */
-function WarehouseModule({ data, mutate, session, showToast }) {
+function WarehouseModule({ data, mutate, session, showToast, darkMode }) {
   const isOwner = session.role === "owner";
   const [tab, setTab] = useState(isOwner ? "intake" : "accept");
 
@@ -1143,7 +1603,7 @@ function WarehouseModule({ data, mutate, session, showToast }) {
     <div className="space-y-5">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Warehouse & Film Rolls</p>
-        <p className="text-sm text-[#5B6B68]">Manage raw rolls intake, transfers, and manager stock acceptance.</p>
+        <p className="text-sm text-[#5B6B68]">Manage raw rolls intake, transfers, and manager roll acceptance in number of rolls.</p>
       </div>
 
       <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit overflow-x-auto">
@@ -1368,7 +1828,7 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
 }
 
 function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
-  const managerAcceptedKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
+  const managerAcceptedRolls = useMemo(() => computeManagerAcceptedRolls(data), [data]);
 
   const handleAccept = (issuanceId, physicalCountInput) => {
     if (Number(physicalCountInput) < 0) return showToast("Count cannot be negative!", "warn");
@@ -1384,8 +1844,8 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
         id: uid(),
         ts: new Date().toLocaleTimeString(),
         read: false,
-        title: "Manager Material Acceptance",
-        msg: `Manager ${session.name} accepted roll issuance ID #${issuanceId.slice(0,5)} with physical count: ${physicalCountInput}`,
+        title: "Manager Roll Stock Acceptance",
+        msg: `Manager ${session.name} accepted roll transfer ID #${issuanceId.slice(0,5)} with physical count: ${physicalCountInput} rolls`,
       };
 
       return {
@@ -1395,30 +1855,30 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
       };
     }, "Accepted Roll Stock", `Confirmed ${physicalCountInput} rolls`);
 
-    showToast("Stock Accepted & Confirmation sent to Admin!");
+    showToast("Roll Stock Accepted in Rolls Count!");
   };
 
   return (
     <div className="space-y-4">
       <div className="bg-white p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center">
         <div>
-          <p className="font-bold text-sm text-[#0B3B45]">Manager Available Floor Roll Balance</p>
-          <p className="text-xs text-gray-500">Only accepted rolls appear here and can be used in production.</p>
+          <p className="font-bold text-sm text-[#0B3B45]">Manager Available Floor Roll Balance (in Rolls)</p>
+          <p className="text-xs text-gray-500">Accepted roll counts available for water production.</p>
         </div>
-        <p className="text-2xl font-mono font-bold text-[#1C8C9E]">{fmt(managerAcceptedKg)} kg</p>
+        <p className="text-2xl font-mono font-bold text-[#1C8C9E]">{fmt(managerAcceptedRolls, 0)} rolls</p>
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Custody Transfers & Acceptance Log</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Custody Transfers & Manager Roll Acceptance</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
               <th className="p-2">Roll Type</th>
               <th className="p-2 text-right">Issued Roll Count</th>
-              <th className="p-2 text-right">Weight (kg)</th>
+              <th className="p-2 text-right">Est. Weight (kg)</th>
               <th className="p-2">Status</th>
-              <th className="p-2">Physical Count & Confirm</th>
+              <th className="p-2">Accepted Roll Count & Confirm</th>
             </tr>
           </thead>
           <tbody>
@@ -1437,9 +1897,9 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
                   </td>
                   <td className="p-2">
                     {item.status === "PENDING" ? (
-                      <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} />
+                      <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} placeholder="Rolls Count" />
                     ) : (
-                      <span className="text-gray-500 font-mono">Confirmed: {item.physicalCount} pcs by {item.confirmedBy}</span>
+                      <span className="text-gray-500 font-mono font-bold">{item.physicalCount} rolls confirmed by {item.confirmedBy}</span>
                     )}
                   </td>
                 </tr>
@@ -1452,18 +1912,34 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
   );
 }
 
-function AcceptForm({ session, onAccept }) {
+function AcceptForm({ session, onAccept, placeholder = "Physical Count" }) {
   const isManager = session?.role === "manager" || session?.role === "owner";
   const [cnt, setCnt] = useState("");
 
-  if (!isManager) {
-    return null;
-  }
+  if (!isManager) return null;
 
   return (
     <div className="flex gap-1 items-center">
-      <input type="number" min="1" value={cnt} onChange={(e) => setCnt(e.target.value)} placeholder="Physical Count" className="inp py-1 text-xs w-28" required />
-      <button type="button" onClick={() => cnt !== "" && onAccept(cnt)} className="btn-success text-xs py-1 px-2">Accept</button>
+      <input
+        type="number"
+        min="1"
+        value={cnt}
+        onChange={(e) => setCnt(e.target.value)}
+        placeholder={placeholder}
+        className="inp py-1 text-xs w-28"
+        required
+      />
+      <button
+        type="button"
+        onClick={() => {
+          if (Number(cnt) > 0) {
+            onAccept(cnt);
+          }
+        }}
+        className="btn-success text-xs py-1 px-2"
+      >
+        Accept
+      </button>
     </div>
   );
 }
@@ -1471,7 +1947,7 @@ function AcceptForm({ session, onAccept }) {
 /* ---------------------------------------------------------------------- */
 /*  PACKING BAGS MODULE                                                    */
 /* ---------------------------------------------------------------------- */
-function PackingModule({ data, mutate, session, showToast }) {
+function PackingModule({ data, mutate, session, showToast, darkMode }) {
   const isOwner = session.role === "owner";
   const [tab, setTab] = useState(isOwner ? "intake" : "accept");
 
@@ -1744,15 +2220,18 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
 /* ---------------------------------------------------------------------- */
 /*  PRODUCTION MODULE                                                     */
 /* ---------------------------------------------------------------------- */
-function ProductionModule({ data, mutate, session, showToast }) {
-  const managerRollsKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
+function ProductionModule({ data, mutate, session, showToast, darkMode }) {
+  const managerRollsCount = useMemo(() => computeManagerAcceptedRolls(data), [data]);
   const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
 
   const [rollTypeId, setRollTypeId] = useState(data.rollTypes[0]?.id || "");
+  const [bagTypeId, setBagTypeId] = useState(data.bagTypes[0]?.id || "");
+  const [operatorName, setOperatorName] = useState("");
+  const [rollsUsed, setRollsUsed] = useState("1");
   const [weightUsed, setWeightUsed] = useState("");
   const [actualBags, setActualBags] = useState("");
-  const [leakage, setLeakage] = useState("0");
   const [bagsUsedQty, setBagsUsedQty] = useState("");
+  const [leakage, setLeakage] = useState("0");
 
   useEffect(() => {
     if ((data.rollTypes || []).length > 0 && !rollTypeId) {
@@ -1760,7 +2239,13 @@ function ProductionModule({ data, mutate, session, showToast }) {
     }
   }, [data.rollTypes, rollTypeId]);
 
-  const canProduce = managerRollsKg > 0 && managerBagsQty > 0;
+  useEffect(() => {
+    if ((data.bagTypes || []).length > 0 && !bagTypeId) {
+      setBagTypeId(data.bagTypes[0].id);
+    }
+  }, [data.bagTypes, bagTypeId]);
+
+  const canProduce = managerRollsCount > 0 && managerBagsQty > 0;
 
   const handleRunProduction = (e) => {
     e.preventDefault();
@@ -1769,13 +2254,18 @@ function ProductionModule({ data, mutate, session, showToast }) {
       return;
     }
 
-    if (Number(weightUsed) <= 0 || Number(actualBags) <= 0 || Number(bagsUsedQty) <= 0) {
+    if (!operatorName.trim()) {
+      showToast("Please specify the Water Cutting Machine Operator name!", "warn");
+      return;
+    }
+
+    if (Number(rollsUsed) <= 0 || Number(weightUsed) <= 0 || Number(actualBags) <= 0 || Number(bagsUsedQty) <= 0) {
       showToast("Negative or zero values are strict violation!", "warn");
       return;
     }
 
-    if (Number(weightUsed) > managerRollsKg) {
-      showToast(`Cannot use more rolls than available (${managerRollsKg} kg)`, "warn");
+    if (Number(rollsUsed) > managerRollsCount) {
+      showToast(`Cannot use more rolls than available (${managerRollsCount} rolls)`, "warn");
       return;
     }
 
@@ -1792,7 +2282,10 @@ function ProductionModule({ data, mutate, session, showToast }) {
         {
           id: uid(),
           date: todayISO(),
+          operatorName: operatorName.trim(),
           rollTypeId,
+          bagTypeId,
+          rollsUsed: Number(rollsUsed),
           weightUsedKg: Number(weightUsed),
           actualBags: Number(actualBags),
           leakageBags: Number(leakage || 0),
@@ -1811,9 +2304,9 @@ function ProductionModule({ data, mutate, session, showToast }) {
         },
         ...(prev.bagUsage || []),
       ],
-    }), "Recorded Production Run", `${netProduced} sachet bags produced`);
+    }), "Recorded Production Run", `${netProduced} sachet bags produced by ${operatorName}`);
 
-    setWeightUsed(""); setActualBags(""); setLeakage("0"); setBagsUsedQty("");
+    setOperatorName(""); setRollsUsed("1"); setWeightUsed(""); setActualBags(""); setLeakage("0"); setBagsUsedQty("");
     showToast("Production Run Logged Successfully!");
   };
 
@@ -1833,53 +2326,74 @@ function ProductionModule({ data, mutate, session, showToast }) {
           </div>
         </div>
       ) : (
-        <form onSubmit={handleRunProduction} className="bg-[#FFFFFF] p-5 rounded-2xl border border-[#DDE3DA] space-y-4 max-w-xl">
-          <p className="font-bold text-[#0B3B45]">Record New Production Run</p>
+        <form onSubmit={handleRunProduction} className="bg-[#FFFFFF] p-5 rounded-2xl border border-[#DDE3DA] space-y-4 max-w-2xl">
+          <p className="font-bold text-[#0B3B45]">Record New Production Run & Machine Assignment</p>
+          
           <div>
-            <label className="text-xs font-semibold text-gray-500">Film Roll Type</label>
-            <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
-              {(data.rollTypes || []).map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+            <label className="text-xs font-semibold text-gray-500">Water Cutting Machine Operator Name *</label>
+            <input value={operatorName} onChange={(e) => setOperatorName(e.target.value)} placeholder="e.g. Samuel Boateng (Machine 1 Operator)" className="inp mt-1" required />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Film Roll Type</label>
+              <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
+                {(data.rollTypes || []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Packing Bag Used</label>
+              <select value={bagTypeId} onChange={(e) => setBagTypeId(e.target.value)} className="inp" required>
+                {(data.bagTypes || []).map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Number of Rolls Used</label>
+              <input type="number" min="1" value={rollsUsed} onChange={(e) => setRollsUsed(e.target.value)} placeholder="1" className="inp" required />
+            </div>
             <div>
               <label className="text-xs font-semibold text-gray-500">Weight Roll Used (kg)</label>
               <input type="number" min="0.1" step="0.1" value={weightUsed} onChange={(e) => setWeightUsed(e.target.value)} placeholder="e.g. 25" className="inp" required />
             </div>
             <div>
-              <label className="text-xs font-semibold text-gray-500">Packing Bags Used (pcs)</label>
+              <label className="text-xs font-semibold text-gray-500">Packing Bags Quantity (pcs)</label>
               <input type="number" min="1" value={bagsUsedQty} onChange={(e) => setBagsUsedQty(e.target.value)} placeholder="e.g. 30" className="inp" required />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-gray-500">Gross Sachet Bags Produce</label>
+              <label className="text-xs font-semibold text-gray-500">Total Bags Produced (Gross)</label>
               <input type="number" min="1" value={actualBags} onChange={(e) => setActualBags(e.target.value)} placeholder="e.g. 900" className="inp" required />
             </div>
             <div>
-              <label className="text-xs font-semibold text-gray-500">Burst / Leakages (Bags)</label>
+              <label className="text-xs font-semibold text-gray-500">Production Leakages / Burst Bags</label>
               <input type="number" min="0" value={leakage} onChange={(e) => setLeakage(e.target.value)} className="inp" required />
             </div>
           </div>
 
-          <button type="submit" className="btn-primary w-full py-2.5">Record Finished Sachet Goods</button>
+          <button type="submit" className="btn-primary w-full py-2.5">Record Finished Sachet Goods & Operator Entry</button>
         </form>
       )}
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Production History</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Production Log & Machine Operator Assignments</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
-              <th className="p-2">Operator</th>
-              <th className="p-2 text-right">Roll Used (kg)</th>
-              <th className="p-2 text-right">Gross Produce</th>
-              <th className="p-2 text-right">Leakage</th>
+              <th className="p-2">Operator Name</th>
+              <th className="p-2 text-right">Rolls Used</th>
+              <th className="p-2 text-right">Weight (kg)</th>
+              <th className="p-2 text-right">Gross Bags</th>
+              <th className="p-2 text-right">Leakage Bags</th>
               <th className="p-2 text-right">Net Sellable Bags</th>
             </tr>
           </thead>
@@ -1887,8 +2401,9 @@ function ProductionModule({ data, mutate, session, showToast }) {
             {(data.productionRuns || []).map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2 font-mono">{r.date}</td>
-                <td className="p-2">{r.recordedBy}</td>
-                <td className="p-2 text-right font-mono">{r.weightUsedKg}</td>
+                <td className="p-2 font-semibold text-blue-900">{r.operatorName || "N/A"}</td>
+                <td className="p-2 text-right font-mono font-bold">{r.rollsUsed || 1} rolls</td>
+                <td className="p-2 text-right font-mono">{r.weightUsedKg} kg</td>
                 <td className="p-2 text-right font-mono">{r.actualBags}</td>
                 <td className="p-2 text-right font-mono text-red-600">{r.leakageBags}</td>
                 <td className="p-2 text-right font-mono font-bold text-green-700">{r.netAvailableBags}</td>
@@ -1896,6 +2411,87 @@ function ProductionModule({ data, mutate, session, showToast }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  REPORTS & DRIVERS MODULE WITH PDF EXPORT                              */
+/* ---------------------------------------------------------------------- */
+function ReportsModule({ data, session, darkMode }) {
+  const isOwnerOrManager = session.role === "owner" || session.role === "manager";
+  const finished = useMemo(() => computeFinishedGoods(data), [data]);
+
+  const handlePrintPDFReport = () => {
+    window.print();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <p className="font-display font-800 text-2xl text-[#0B3B45]">Reports & Analytics</p>
+          <p className="text-sm text-[#5B6B68]">Operational summary, sales history, leakages, and giveaways.</p>
+        </div>
+
+        <button onClick={handlePrintPDFReport} className="btn-primary py-2 px-4 no-print">
+          <Printer size={16} /> Export PDF Report / Print
+        </button>
+      </div>
+
+      <div id="printable-area" className="space-y-6">
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+          <p className="font-bold text-[#0B3B45] text-base">Executive Operations Summary</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="p-3 bg-[#F7F8F5] rounded-xl border">
+              <p className="text-[11px] font-semibold text-gray-500">Total Sachet Bags Produced</p>
+              <p className="text-lg font-mono font-bold text-[#0B3B45] mt-1">{fmt(finished.totalProduced, 0)} bags</p>
+            </div>
+            <div className="p-3 bg-[#F7F8F5] rounded-xl border">
+              <p className="text-[11px] font-semibold text-gray-500">Total Bags Sold</p>
+              <p className="text-lg font-mono font-bold text-blue-900 mt-1">{fmt(finished.totalSold, 0)} bags</p>
+            </div>
+            <div className="p-3 bg-[#FBEAE5] rounded-xl border">
+              <p className="text-[11px] font-semibold text-[#C4472F]">Free Giveaways / Promo Bags</p>
+              <p className="text-lg font-mono font-bold text-[#C4472F] mt-1">{fmt(finished.totalFree, 0)} bags</p>
+            </div>
+            <div className="p-3 bg-[#EAF3F1] rounded-xl border">
+              <p className="text-[11px] font-semibold text-[#2A6E4A]">Net Available Stock</p>
+              <p className="text-lg font-mono font-bold text-[#2A6E4A] mt-1">{fmt(finished.availableForSale, 0)} bags</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+          <p className="font-bold text-[#0B3B45] mb-3 text-base">Sales, Leakages & Free Bags Audit Ledger</p>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-[#F7F8F5] text-left">
+                <th className="p-2">Date</th>
+                <th className="p-2">Customer / Recipient</th>
+                <th className="p-2 text-right">Bags Sold</th>
+                <th className="p-2 text-right">Free Bags Given</th>
+                <th className="p-2 text-right">Leakages/Damaged</th>
+                <th className="p-2 text-right">Total Revenue</th>
+                <th className="p-2">Channel</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data.sales || []).map((s) => (
+                <tr key={s.id} className="border-t">
+                  <td className="p-2 font-mono">{s.date}</td>
+                  <td className="p-2 font-semibold">{s.customer}</td>
+                  <td className="p-2 text-right font-mono font-bold">{s.bagsSold}</td>
+                  <td className="p-2 text-right font-mono font-bold text-amber-600">{s.freeBags || 0}</td>
+                  <td className="p-2 text-right font-mono text-red-600">{s.leakages || 0}</td>
+                  <td className="p-2 text-right font-mono font-bold text-green-700">{fmtGHS(s.totalAmount)}</td>
+                  <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1946,6 +2542,18 @@ function ReceiptModal({ sale, companyName, driversList, onClose }) {
               <span>Sachet Water ({sale.bagsSold} bags @ {fmtGHS(sale.pricePerBag)})</span>
               <span className="font-bold">{fmtGHS(sale.totalAmount)}</span>
             </div>
+            {sale.freeBags > 0 && (
+              <div className="flex justify-between text-left text-amber-700">
+                <span>Free Giveaway / Promo Bags</span>
+                <span className="font-bold">{sale.freeBags} bags</span>
+              </div>
+            )}
+            {sale.leakages > 0 && (
+              <div className="flex justify-between text-left text-red-600">
+                <span>Recorded Leakages/Damaged</span>
+                <span className="font-bold">{sale.leakages} bags</span>
+              </div>
+            )}
           </div>
 
           <div className="pt-1 flex justify-between items-center text-sm font-bold">
@@ -1975,7 +2583,7 @@ function ReceiptModal({ sale, companyName, driversList, onClose }) {
 /* ---------------------------------------------------------------------- */
 /*  SALES & BANK DEPOSIT MODULE                                           */
 /* ---------------------------------------------------------------------- */
-function SalesModule({ data, mutate, session, showToast }) {
+function SalesModule({ data, mutate, session, showToast, darkMode }) {
   const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
   const cashAvailable = useMemo(() => computeCashBalance(data), [data]);
@@ -1983,6 +2591,8 @@ function SalesModule({ data, mutate, session, showToast }) {
   const [driverId, setDriverId] = useState(driversList[0]?.id || "factory");
   const [customer, setCustomer] = useState("");
   const [bagsSold, setBagsSold] = useState("");
+  const [freeBags, setFreeBags] = useState("0");
+  const [leakages, setLeakages] = useState("0");
   const [paymentMethod, setPaymentMethod] = useState("cash");
 
   const [depositAmount, setDepositAmount] = useState("");
@@ -1993,15 +2603,17 @@ function SalesModule({ data, mutate, session, showToast }) {
   const handleSale = (e) => {
     e.preventDefault();
 
+    const totalDeduction = Number(bagsSold || 0) + Number(freeBags || 0) + Number(leakages || 0);
+
     if (finished.availableForSale <= 0) {
       showToast("SALES DISALLOWED: Zero sachet bags produce available!", "warn");
       return;
     }
 
-    if (Number(bagsSold) <= 0) return showToast("Quantity sold must be greater than zero!", "warn");
+    if (Number(bagsSold) <= 0 && Number(freeBags) <= 0) return showToast("Quantity sold or free bags must be greater than zero!", "warn");
 
-    if (Number(bagsSold) > finished.availableForSale) {
-      showToast(`Cannot sell more than available finished stock (${finished.availableForSale} bags)`, "warn");
+    if (totalDeduction > finished.availableForSale) {
+      showToast(`Cannot release more than available finished stock (${finished.availableForSale} bags)`, "warn");
       return;
     }
 
@@ -2015,6 +2627,8 @@ function SalesModule({ data, mutate, session, showToast }) {
       driverId: driverId === "factory" ? null : driverId,
       customer: customer || "Direct Customer",
       bagsSold: Number(bagsSold),
+      freeBags: Number(freeBags || 0),
+      leakages: Number(leakages || 0),
       pricePerBag,
       totalAmount,
       amountPaid: totalAmount,
@@ -2025,10 +2639,10 @@ function SalesModule({ data, mutate, session, showToast }) {
     mutate((prev) => ({
       ...prev,
       sales: [newSale, ...(prev.sales || [])],
-    }), "Recorded Sale", `${bagsSold} bags sold to ${customer || "Direct Customer"}`);
+    }), "Recorded Sale", `${bagsSold} bags sold, ${freeBags} free bags to ${customer || "Direct Customer"}`);
 
-    setBagsSold(""); setCustomer("");
-    showToast("Sale Recorded Successfully!");
+    setBagsSold(""); setFreeBags("0"); setLeakages("0"); setCustomer("");
+    showToast("Sale & Supply Recorded Successfully!");
     setActiveReceiptSale(newSale);
   };
 
@@ -2064,14 +2678,14 @@ function SalesModule({ data, mutate, session, showToast }) {
   return (
     <div className="space-y-6">
       <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Sales, Drivers & Cash</p>
-        <p className="text-sm text-[#5B6B68]">Record sales against trucks or direct factory sales, print receipts, and reconcile cash.</p>
+        <p className="font-display font-800 text-2xl text-[#0B3B45]">Sales, Drivers & Free Supply</p>
+        <p className="text-sm text-[#5B6B68]">Record sales against trucks or direct factory sales, log free promo bags, leakages, print receipts, and reconcile cash.</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
           <div className="flex justify-between items-center">
-            <p className="font-bold text-[#0B3B45]">Record Sachet Water Sale</p>
+            <p className="font-bold text-[#0B3B45]">Record Sachet Water Sale & Free Supply</p>
             <span className="text-xs font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded">
               Stock: {fmt(finished.availableForSale, 0)} bags
             </span>
@@ -2100,12 +2714,23 @@ function SalesModule({ data, mutate, session, showToast }) {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-xs font-semibold text-gray-500">Bags Quantity</label>
-                  <input type="number" min="1" max={finished.availableForSale} value={bagsSold} onChange={(e) => setBagsSold(e.target.value)} className="inp" required />
+                  <label className="text-xs font-semibold text-gray-500">Bags Sold Quantity</label>
+                  <input type="number" min="0" max={finished.availableForSale} value={bagsSold} onChange={(e) => setBagsSold(e.target.value)} className="inp" required />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500">Fixed Unit Price</label>
                   <input value={fmtGHS(data.settings.pricePerBag)} disabled className="inp" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Free Bags Given (Promo)</label>
+                  <input type="number" min="0" value={freeBags} onChange={(e) => setFreeBags(e.target.value)} placeholder="0" className="inp" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Sales Leakages / Damaged</label>
+                  <input type="number" min="0" value={leakages} onChange={(e) => setLeakages(e.target.value)} placeholder="0" className="inp" />
                 </div>
               </div>
 
@@ -2135,58 +2760,18 @@ function SalesModule({ data, mutate, session, showToast }) {
 
           <form onSubmit={handleBankDeposit} className="space-y-3">
             <div>
-              <label className="text-xs font-semibold text-gray-500">Deposit Amount (GH₵)</label>
-              <input type="number" min="0.01" step="0.01" max={cashAvailable} value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} placeholder="e.g. 500" className="inp" required />
+              <label className="text-xs font-semibold text-gray-500">Bank Name / Account</label>
+              <input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. GCB Bank - Adabraka Branch" className="inp" required />
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-gray-500">Destination Bank Name / Ref</label>
-              <input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. GCB Bank - Accra Branch" className="inp" required />
+              <label className="text-xs font-semibold text-gray-500">Deposit Amount (GH₵)</label>
+              <input type="number" min="0.01" step="0.01" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} placeholder="e.g. 1000" className="inp" required />
             </div>
 
-            <button type="submit" className="btn-success w-full py-2.5">Deposit & Match Cash Balance</button>
+            <button type="submit" className="btn-primary w-full py-2.5">Reconcile Bank Deposit</button>
           </form>
         </div>
-      </div>
-
-      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Recent Sales Transactions & Purchase Receipts</p>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Date/Time</th>
-              <th className="p-2">Customer</th>
-              <th className="p-2">Channel / Driver</th>
-              <th className="p-2 text-right">Bags Sold</th>
-              <th className="p-2 text-right">Total Amount</th>
-              <th className="p-2">Method</th>
-              <th className="p-2 text-center">Receipt</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data.sales || []).map((s) => {
-              const drv = driversList.find((d) => d.id === s.driverId);
-              return (
-                <tr key={s.id} className="border-t">
-                  <td className="p-2 font-mono">{s.date}</td>
-                  <td className="p-2 font-semibold">{s.customer}</td>
-                  <td className="p-2 text-blue-900 font-semibold">{drv ? drv.name : "Direct Factory Sale"}</td>
-                  <td className="p-2 text-right font-mono">{s.bagsSold}</td>
-                  <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
-                  <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
-                  <td className="p-2 text-center">
-                    <button
-                      onClick={() => setActiveReceiptSale(s)}
-                      className="px-2 py-1 bg-[#EAF3F1] hover:bg-[#1C8C9E] hover:text-white rounded text-[#0B3B45] font-bold text-[10px] flex items-center justify-center gap-1 mx-auto"
-                    >
-                      <Receipt size={12} /> Print Receipt
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
       </div>
 
       {activeReceiptSale && (
@@ -2197,466 +2782,6 @@ function SalesModule({ data, mutate, session, showToast }) {
           onClose={() => setActiveReceiptSale(null)}
         />
       )}
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------------- */
-/*  REPORTS & DRIVER DASHBOARD MODULE                                     */
-/* ---------------------------------------------------------------------- */
-function ReportsModule({ data, session }) {
-  const isDriver = session.role === "driver";
-  const [activeTab, setActiveTab] = useState("drivers");
-  const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
-  const [filterDriver, setFilterDriver] = useState(isDriver ? session.id : "all");
-
-  const salesFiltered = useMemo(() => {
-    if (filterDriver === "all") return data.sales || [];
-    return (data.sales || []).filter((s) => s.driverId === filterDriver);
-  }, [data.sales, filterDriver]);
-
-  const metrics = useMemo(() => {
-    const now = new Date();
-    const todayStr = todayISO();
-
-    let daily = 0, weekly = 0, monthly = 0, annual = 0;
-
-    salesFiltered.forEach((s) => {
-      const d = new Date(s.date);
-      const diffDays = (now - d) / (1000 * 3600 * 24);
-
-      if (s.date === todayStr) daily += s.totalAmount;
-      if (diffDays <= 7) weekly += s.totalAmount;
-      if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) monthly += s.totalAmount;
-      if (d.getFullYear() === now.getFullYear()) annual += s.totalAmount;
-    });
-
-    return { daily, weekly, monthly, annual };
-  }, [salesFiltered]);
-
-  const driverStats = useMemo(() => {
-    const visibleDrivers = isDriver ? driversList.filter((d) => d.id === session.id) : driversList;
-
-    return visibleDrivers.map((driver) => {
-      const driverSales = (data.sales || []).filter((s) => s.driverId === driver.id);
-      const totalBags = driverSales.reduce((acc, s) => acc + s.bagsSold, 0);
-      const totalRevenue = driverSales.reduce((acc, s) => acc + s.totalAmount, 0);
-      const todayBags = driverSales
-        .filter((s) => s.date === todayISO())
-        .reduce((acc, s) => acc + s.bagsSold, 0);
-
-      return {
-        ...driver,
-        totalSalesCount: driverSales.length,
-        totalBags,
-        totalRevenue,
-        todayBags,
-      };
-    });
-  }, [driversList, data.sales, isDriver, session.id]);
-
-  const handleGeneratePdf = () => {
-    window.print();
-  };
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <p className="font-display font-800 text-2xl text-[#0B3B45]">{isDriver ? "Driver Delivery Portal" : "Reports & Delivery Drivers"}</p>
-          <p className="text-sm text-[#5B6B68]">Delivery performance, truck logs, and periodic revenue analytics.</p>
-        </div>
-
-        <div className="flex gap-2 no-print">
-          <button onClick={handleGeneratePdf} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
-            <Printer size={14} /> Generate PDF Report
-          </button>
-          {!isDriver && (
-            <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
-              <button
-                onClick={() => setActiveTab("drivers")}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "drivers" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
-              >
-                Driver Dashboard
-              </button>
-              <button
-                onClick={() => setActiveTab("ledger")}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "ledger" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
-              >
-                Periodic Sales Ledger
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div id="printable-area" className="space-y-5">
-        {activeTab === "drivers" && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {driverStats.map((driver) => (
-                <div key={driver.id} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] shadow-sm space-y-4">
-                  <div className="flex items-center justify-between border-b border-[#EDEFEA] pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-xl bg-[#0B3B45] flex items-center justify-center text-white">
-                        <Truck size={18} />
-                      </div>
-                      <div>
-                        <p className="font-bold text-[#0B3B45] text-sm">{driver.name}</p>
-                        <p className="text-[11px] font-mono text-[#5B6B68]">Reg: {driver.truckNo || "N/A"}</p>
-                      </div>
-                    </div>
-                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 text-green-800">
-                      Active Truck
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
-                      <p className="text-gray-500 font-semibold text-[10px]">Today Dispatched</p>
-                      <p className="font-mono font-bold text-sm text-[#0B3B45]">{fmt(driver.todayBags, 0)} bags</p>
-                    </div>
-                    <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
-                      <p className="text-gray-500 font-semibold text-[10px]">Total Sold Volume</p>
-                      <p className="font-mono font-bold text-sm text-[#1C8C9E]">{fmt(driver.totalBags, 0)} bags</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#EAF3F1] p-3 rounded-xl border border-[#BFDCD6] flex justify-between items-center">
-                    <span className="text-xs font-semibold text-[#0B3B45]">Lifetime Revenue</span>
-                    <span className="font-mono font-extrabold text-sm text-[#2A6E4A]">{fmtGHS(driver.totalRevenue)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {(activeTab === "ledger" && !isDriver) && (
-          <div className="space-y-5">
-            <div className="flex justify-between items-center no-print">
-              <span className="text-xs font-bold text-[#0B3B45]">Filter Driver:</span>
-              <select value={filterDriver} onChange={(e) => setFilterDriver(e.target.value)} className="inp w-60">
-                <option value="all">All Delivery Truck Drivers</option>
-                {driversList.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <StatCard icon={Truck} label="Daily Sales" value={fmtGHS(metrics.daily)} accent="#1C8C9E" />
-              <StatCard icon={Calendar} label="Weekly Sales (7-Day)" value={fmtGHS(metrics.weekly)} accent="#2A6E4A" />
-              <StatCard icon={TrendingUp} label="Monthly Sales" value={fmtGHS(metrics.monthly)} accent="#E8A23D" />
-              <StatCard icon={Wallet} label="Annual Sales" value={fmtGHS(metrics.annual)} accent="#0B3B45" />
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-              <p className="font-bold text-[#0B3B45] mb-3">Sales Ledger by Truck Driver</p>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-[#F7F8F5] text-left">
-                    <th className="p-2">Date</th>
-                    <th className="p-2">Driver / Truck</th>
-                    <th className="p-2">Customer</th>
-                    <th className="p-2 text-right">Bags Sold</th>
-                    <th className="p-2 text-right">Total Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {salesFiltered.map((s) => {
-                    const drv = driversList.find((d) => d.id === s.driverId);
-                    return (
-                      <tr key={s.id} className="border-t">
-                        <td className="p-2 font-mono">{s.date}</td>
-                        <td className="p-2 font-semibold text-blue-900">{drv?.name || "Direct Factory Sale"}</td>
-                        <td className="p-2">{s.customer}</td>
-                        <td className="p-2 text-right font-mono">{s.bagsSold}</td>
-                        <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------------- */
-/*  ADMIN MANAGEMENT MODULE & BUSINESS DETAILS REGISTRATION               */
-/* ---------------------------------------------------------------------- */
-function AdminManagementModule({ data, mutate, showToast }) {
-  const [selectedUserId, setSelectedUserId] = useState(data.users[0]?.id || "");
-  const [newPassword, setNewPassword] = useState("");
-  const [unitPrice, setUnitPrice] = useState(data.settings.pricePerBag || 5.0);
-
-  const [bizName, setBizName] = useState(data.businessDetails?.name || "");
-  const [bizPhone, setBizPhone] = useState(data.businessDetails?.phone || "");
-  const [bizAddress, setBizAddress] = useState(data.businessDetails?.address || "");
-  const [bizTin, setBizTin] = useState(data.businessDetails?.tin || "");
-
-  const [userName, setUserName] = useState("");
-  const [userRole, setUserRole] = useState("driver");
-  const [userPassword, setUserPassword] = useState("123");
-  const [truckNo, setTruckNo] = useState("");
-  const [userEmail, setUserEmail] = useState("");
-
-  const usersList = useMemo(() => data.users || [], [data.users]);
-
-  const handleUpdatePrice = (e) => {
-    e.preventDefault();
-    if (Number(unitPrice) <= 0) return showToast("Price per bag must be positive!", "warn");
-
-    mutate((prev) => ({
-      ...prev,
-      settings: {
-        ...prev.settings,
-        pricePerBag: Number(unitPrice),
-      },
-    }), "Updated Price Per Bag", `GH₵ ${unitPrice} per bag`);
-
-    showToast("Unit Price Updated!");
-  };
-
-  const handleUpdateBusiness = (e) => {
-    e.preventDefault();
-    mutate((prev) => ({
-      ...prev,
-      businessDetails: {
-        name: bizName,
-        phone: bizPhone,
-        address: bizAddress,
-        tin: bizTin,
-        isRegistered: true,
-      },
-      settings: {
-        ...prev.settings,
-        companyName: bizName || prev.settings.companyName,
-      },
-    }), "Updated Business Setup", bizName);
-
-    showToast("Business Information Saved!");
-  };
-
-  const handleAddUser = (e) => {
-    e.preventDefault();
-    if (!userName.trim()) return showToast("User name is required!", "warn");
-
-    const newUser = {
-      id: uid(),
-      name: userName.trim(),
-      role: userRole,
-      password: userPassword,
-      ...(userRole === "driver" ? { truckNo: truckNo.trim() || "N/A" } : {}),
-      ...(userRole === "owner" ? { email: userEmail.trim() } : {}),
-    };
-
-    mutate((prev) => ({
-      ...prev,
-      users: [...(prev.users || []), newUser],
-    }), "Created User Account", `${userName} (${userRole})`);
-
-    setUserName("");
-    setTruckNo("");
-    setUserEmail("");
-    setUserPassword("123");
-    showToast("New User Account Created!");
-  };
-
-  const handleResetUserPassword = (e) => {
-    e.preventDefault();
-    if (!selectedUserId) return;
-    if (!newPassword || newPassword.length < 3) return showToast("Password too short!", "warn");
-
-    const usr = usersList.find((u) => u.id === selectedUserId);
-
-    mutate((prev) => ({
-      ...prev,
-      users: (prev.users || []).map((u) => u.id === selectedUserId ? { ...u, password: newPassword } : u),
-    }), "Changed User Password", usr ? usr.name : selectedUserId);
-
-    setNewPassword("");
-    showToast("User Password Updated!");
-  };
-
-  const handleDeleteUser = (userId, name) => {
-    if (usersList.length <= 1) return showToast("Cannot delete the only remaining user!", "warn");
-    if (window.confirm(`Are you sure you want to delete user: ${name}?`)) {
-      mutate((prev) => ({
-        ...prev,
-        users: (prev.users || []).filter((u) => u.id !== userId),
-      }), "Deleted User Account", name);
-      showToast("User Deleted!");
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin Settings & User Accounts</p>
-        <p className="text-sm text-[#5B6B68]">System parameters, sachet bag pricing, user credentials, and company details.</p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        {/* Price & Unit Setup */}
-        <form onSubmit={handleUpdatePrice} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <div className="flex items-center gap-2 border-b pb-2">
-            <Settings2 className="text-[#0B3B45]" size={18} />
-            <p className="font-bold text-[#0B3B45]">Sachet Bag Pricing Setup</p>
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Global Sales Price Per Sachet Bag (GH₵)</label>
-            <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={unitPrice}
-              onChange={(e) => setUnitPrice(e.target.value)}
-              className="inp mt-1"
-              required
-            />
-          </div>
-          <button type="submit" className="btn-primary w-full">Update Bag Price</button>
-        </form>
-
-        {/* Business Registration */}
-        <form onSubmit={handleUpdateBusiness} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <div className="flex items-center gap-2 border-b pb-2">
-            <Building className="text-[#0B3B45]" size={18} />
-            <p className="font-bold text-[#0B3B45]">Company & GRA Details</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Business Name</label>
-              <input value={bizName} onChange={(e) => setBizName(e.target.value)} placeholder="Company Name" className="inp mt-1" required />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Phone</label>
-              <input value={bizPhone} onChange={(e) => setBizPhone(e.target.value)} placeholder="Phone" className="inp mt-1" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Address / City</label>
-              <input value={bizAddress} onChange={(e) => setBizAddress(e.target.value)} placeholder="Location" className="inp mt-1" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">TIN Number</label>
-              <input value={bizTin} onChange={(e) => setBizTin(e.target.value)} placeholder="TIN" className="inp mt-1" />
-            </div>
-          </div>
-          <button type="submit" className="btn-primary w-full">Save Business Info</button>
-        </form>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        {/* Create User Account */}
-        <form onSubmit={handleAddUser} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <div className="flex items-center gap-2 border-b pb-2">
-            <Users className="text-[#0B3B45]" size={18} />
-            <p className="font-bold text-[#0B3B45]">Create New User / Driver</p>
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Full Name</label>
-            <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="e.g. Ama Serwaa" className="inp mt-1" required />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">System Role</label>
-              <select value={userRole} onChange={(e) => setUserRole(e.target.value)} className="inp mt-1">
-                <option value="driver">Delivery Driver</option>
-                <option value="cashier">Plant Cashier</option>
-                <option value="manager">Factory Manager</option>
-                <option value="owner">Business Owner</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Password</label>
-              <input type="text" value={userPassword} onChange={(e) => setUserPassword(e.target.value)} placeholder="123" className="inp mt-1" required />
-            </div>
-          </div>
-
-          {userRole === "driver" && (
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Truck Number / Reg Plate</label>
-              <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. GT-1022-22" className="inp mt-1" required />
-            </div>
-          )}
-
-          {userRole === "owner" && (
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Admin Recovery Email</label>
-              <input type="email" value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="admin@pureledger.com" className="inp mt-1" required />
-            </div>
-          )}
-
-          <button type="submit" className="btn-primary w-full"><Plus size={15} /> Add User Account</button>
-        </form>
-
-        {/* Change Password */}
-        <form onSubmit={handleResetUserPassword} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <div className="flex items-center gap-2 border-b pb-2">
-            <Lock className="text-[#0B3B45]" size={18} />
-            <p className="font-bold text-[#0B3B45]">Reset User Credentials</p>
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Target User</label>
-            <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} className="inp mt-1">
-              {usersList.map((u) => (
-                <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-500">New Password</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password" className="inp mt-1" required />
-          </div>
-
-          <button type="submit" className="btn-primary w-full">Update Password</button>
-        </form>
-      </div>
-
-      {/* User Accounts List */}
-      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">All System Accounts</p>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Name</th>
-              <th className="p-2">Role</th>
-              <th className="p-2">Truck / Detail</th>
-              <th className="p-2">Email</th>
-              <th className="p-2 text-center">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {usersList.map((u) => (
-              <tr key={u.id} className="border-t">
-                <td className="p-2 font-bold text-[#0B3B45]">{u.name}</td>
-                <td className="p-2 uppercase font-mono text-[10px]">{u.role}</td>
-                <td className="p-2 font-mono text-gray-600">{u.truckNo || "N/A"}</td>
-                <td className="p-2 text-gray-500">{u.email || "N/A"}</td>
-                <td className="p-2 text-center">
-                  <button
-                    onClick={() => handleDeleteUser(u.id, u.name)}
-                    className="p-1 text-red-600 hover:bg-red-50 rounded"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }
