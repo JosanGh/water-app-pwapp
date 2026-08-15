@@ -3,8 +3,7 @@ import viteLogo from './assets/vite.svg'
 import { openDB } from 'https://unpkg.com';
 
 import { createClient } from '@supabase/supabase-js'
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { createClient } from '@supabase/supabase-[#2A6E4A]';
+
 import {
   Droplets, Warehouse, PackageOpen, Factory, Wallet, FileBarChart, ShieldCheck,
   LogOut, Plus, ChevronRight, AlertTriangle, CheckCircle2, Wifi, WifiOff,
