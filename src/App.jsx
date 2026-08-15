@@ -1,21 +1,21 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
-import { openDB } from 'https://unpkg.com';
+import heroImg from './assets/hero.png'
 
 import { createClient } from '@supabase/supabase-js'
-
 import {
   Droplets, Warehouse, PackageOpen, Factory, Wallet, FileBarChart, ShieldCheck,
   LogOut, Plus, ChevronRight, AlertTriangle, CheckCircle2, Wifi, WifiOff,
   Users, Settings2, Scale, TrendingUp, TrendingDown, ClipboardList, X, Lock,
-  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building, DollarSign, RotateCcw, Trash2, Sun, Moon, AlertCircle
+  Printer, Calendar, Menu, Bell, Pencil, Truck, Check, KeyRound, Mail, Receipt, Building, DollarSign, RotateCcw, Trash2
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
 /*  SUPABASE CLIENT & SYNC ENGINE                                          */
 /* ---------------------------------------------------------------------- */
-const SUPABASE_URL = import.meta.env?.VITE_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
 export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -35,45 +35,59 @@ async function syncToSupabase(data) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  STORAGE ENGINE & DEFAULT DATA STRUCTURE                                */
+/*  PWA SERVICE WORKER REGISTRATION                                        */
+/* ---------------------------------------------------------------------- */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch((err) => {
+      console.log("SW registration failed: ", err);
+    });
+  });
+}
+
+/* ---------------------------------------------------------------------- */
+/*  STORAGE ENGINE & DATA STRUCTURE                                        */
 /* ---------------------------------------------------------------------- */
 const STORAGE_KEY = "pureledger-ghana-erp-db";
 
 const emptyData = {
   users: [
-    { id: "u1", name: "Super Admin", role: "owner", password: "123456", email: "admin@mattbeeswater.com" },
-    { id: "u2", name: "Factory Manager", role: "manager", password: "123456" },
-    { id: "u3", name: "Plant Cashier", role: "cashier", password: "123456" },
-    { id: "d1", name: "Kwame (Truck GT-1022-22)", role: "driver", password: "123456", truckNo: "GT-1022-22" },
+    { id: "u1", name: "Super Admin", role: "owner", password: "123", email: "admin@pureledger.com" },
+    { id: "u2", name: "Factory Manager", role: "manager", password: "123" },
+    { id: "u3", name: "Plant Cashier", role: "cashier", password: "123" },
+    { id: "d1", name: "Kwame (Truck GT-1022-22)", role: "driver", password: "123", truckNo: "GT-1022-22" },
+    { id: "d2", name: "Kofi (Truck WR-5541-21)", role: "driver", password: "123", truckNo: "WR-5541-21" },
   ],
   businessDetails: {
-    name: "Mattbees Water Services",
-    address: "Accra, Ghana",
-    phone: "+233 24 000 0000",
-    tin: "C0000000000",
-    isRegistered: true,
+    name: "",
+    address: "",
+    phone: "",
+    tin: "",
+    isRegistered: false,
   },
-  rollTypes: [{ id: "rt1", name: "Standard 25kg Film Roll", standardWeightKg: 25 }],
+  rollTypes: [],
   intake: [],
   issuance: [],
-  bagTypes: [{ id: "bt1", name: "Standard Outer Packing Bag", capacity: 30 }],
+  bagTypes: [],
   bagIntake: [],
   bagIssuance: [],
   bagUsage: [],
+  bagCounts: [],
   productionRuns: [],
   sales: [],
   debtPayments: [],
   expenses: [],
   adminExpenses: [],
-  expenseCategories: ["Raw Material", "Utilities", "Maintenance", "Transport & Fuel", "Salaries & Wages", "Tax & GRA", "General Admin", "Miscellaneous"],
   bankDeposits: [],
   notifications: [],
   settings: {
     pricePerBag: 5.0,
-    companyName: "Mattbees Water Services",
+    companyName: "Ghana Pure Water Ltd",
+    lowStockRollKg: 50,
+    lowStockBagQty: 200,
+    lowStockFinishedBags: 500,
   },
   auditLog: [],
-  superAdminRegistered: true,
 };
 
 async function loadData() {
@@ -86,12 +100,11 @@ async function loadData() {
           ...emptyData,
           ...remote.data,
           settings: { ...emptyData.settings, ...(remote.data.settings || {}) },
-          businessDetails: { ...emptyData.businessDetails, ...(remote.data.businessDetails || {}) },
-          expenseCategories: remote.data.expenseCategories || emptyData.expenseCategories
+          businessDetails: { ...emptyData.businessDetails, ...(remote.data.businessDetails || {}) }
         };
       }
     } catch (e) {
-      console.warn("Supabase load failed, using local storage fallback", e);
+      console.warn("Supabase load failed, falling back to local storage", e);
     }
   }
 
@@ -103,8 +116,7 @@ async function loadData() {
       ...emptyData,
       ...parsed,
       settings: { ...emptyData.settings, ...(parsed.settings || {}) },
-      businessDetails: { ...emptyData.businessDetails, ...(parsed.businessDetails || {}) },
-      expenseCategories: parsed.expenseCategories || emptyData.expenseCategories
+      businessDetails: { ...emptyData.businessDetails, ...(parsed.businessDetails || {}) }
     };
   } catch {
     return emptyData;
@@ -128,15 +140,15 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const fmt = (n, d = 1) => Number(n || 0).toLocaleString("en-GH", { maximumFractionDigits: d, minimumFractionDigits: 0 });
 const fmtGHS = (n) => `GH₵ ${fmt(n, 2)}`;
 
-const DEFAULT_ROLES = {
-  owner: { label: "Business Owner / Super Admin", desc: "Full control · Financials · Roles · System Admin", icon: ShieldCheck },
-  manager: { label: "Factory Manager", desc: "Operations · Production Floor · Roll & Bag Counts", icon: Users },
-  cashier: { label: "Plant Cashier", desc: "Direct Sales & Payment Collections", icon: Wallet },
-  driver: { label: "Delivery Driver", desc: "Distribution Operations", icon: Truck },
+const ROLES = {
+  owner: { label: "Business Owner", desc: "Full control · Financials · Price setup · Transfers", icon: ShieldCheck },
+  manager: { label: "Manager", desc: "Operations · Production · Stock Acceptance", icon: Users },
+  cashier: { label: "Cashier", desc: "Driver & Customer Sales Entry", icon: Wallet },
+  driver: { label: "Delivery Driver", desc: "Delivery Operations", icon: Truck },
 };
 
 /* ---------------------------------------------------------------------- */
-/*  TOAST NOTIFICATION COMPONENT                                           */
+/*  TOAST COMPONENT                                                        */
 /* ---------------------------------------------------------------------- */
 function Toast({ msg, tone = "ok" }) {
   const isWarn = tone === "warn";
@@ -149,7 +161,7 @@ function Toast({ msg, tone = "ok" }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  MAIN APPLICATION COMPONENT                                            */
+/*  MAIN ENTRY APP                                                         */
 /* ---------------------------------------------------------------------- */
 export default function App() {
   const [session, setSession] = useState(null);
@@ -159,7 +171,7 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const [showBusinessModal, setShowBusinessModal] = useState(false);
 
   useEffect(() => {
     loadData().then((d) => {
@@ -184,7 +196,7 @@ export default function App() {
 
   const showToast = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone });
-    setTimeout(() => setToast(null), 3200);
+    setTimeout(() => setToast(null), 3000);
   }, []);
 
   const mutate = useCallback((updater, auditAction, auditDetail) => {
@@ -199,8 +211,7 @@ export default function App() {
             ].slice(0, 999),
           }
         : draft;
-
-      setTimeout(() => saveData(withAudit), 0);
+      saveData(withAudit);
       return withAudit;
     });
   }, [session]);
@@ -208,30 +219,11 @@ export default function App() {
   const handleLogin = (s) => {
     setSession(s);
     setPage(s.role === "cashier" ? "sales" : s.role === "driver" ? "reports" : "dashboard");
-    showToast(`Welcome back, ${s.name}`);
-  };
+    showToast(`Welcome, ${s.name}`);
 
-  const handleRegisterSuperAdmin = (email, fullName, password) => {
-    const newAdmin = {
-      id: "u1",
-      name: fullName,
-      role: "owner",
-      password: password,
-      email: email.toLowerCase(),
-    };
-
-    setData((prev) => {
-      const updatedUsers = (prev.users || []).filter((u) => u.id !== "u1" && u.role !== "owner");
-      const nextData = {
-        ...prev,
-        superAdminRegistered: true,
-        users: [newAdmin, ...updatedUsers],
-      };
-      saveData(nextData);
-      return nextData;
-    });
-
-    showToast("Super Admin registered successfully! You can now log in.");
+    if (s.role === "owner" && !data.businessDetails?.isRegistered) {
+      setShowBusinessModal(true);
+    }
   };
 
   const handleResetAdminPassword = (emailInput, newPass) => {
@@ -249,12 +241,29 @@ export default function App() {
     return true;
   };
 
+  const handleSaveBusinessDetails = (details) => {
+    mutate((prev) => ({
+      ...prev,
+      businessDetails: {
+        ...details,
+        isRegistered: true,
+      },
+      settings: {
+        ...prev.settings,
+        companyName: details.name || prev.settings.companyName,
+      },
+    }), "Updated Business Details", details.name);
+
+    setShowBusinessModal(false);
+    showToast("Business Details Saved Successfully!");
+  };
+
   if (!loaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#0B3B45]">
         <div className="flex items-center gap-3 text-[#EAF3F1]">
           <Droplets className="animate-pulse" size={28} />
-          <span className="font-mono text-sm tracking-widest uppercase">Loading Mattbees Water Services ERP…</span>
+          <span className="font-mono text-sm tracking-widest uppercase">Loading PureLedger ERP…</span>
         </div>
       </div>
     );
@@ -263,16 +272,15 @@ export default function App() {
   if (!session) {
     return (
       <LoginScreen
-        data={data}
+        users={data.users || []}
         onLogin={handleLogin}
-        onRegisterSuperAdmin={handleRegisterSuperAdmin}
         onResetAdminPassword={handleResetAdminPassword}
       />
     );
   }
 
   return (
-    <div className={`min-h-screen ${darkMode ? "bg-gray-900 text-gray-100 dark-mode" : "bg-[#F2F4EF] text-[#16211F]"} font-body transition-colors duration-200`}>
+    <div className="min-h-screen bg-[#F2F4EF] text-[#16211F] font-body">
       <style dangerouslySetInnerHTML={{ __html: CSS_TOOLKIT }} />
       <div className="flex">
         <Sidebar
@@ -284,44 +292,41 @@ export default function App() {
           onClose={() => setMobileNavOpen(false)}
         />
         <div className="flex-1 min-w-0">
-          <TopBar 
-            session={session} 
-            online={online} 
-            onMenuClick={() => setMobileNavOpen(true)} 
-            onLogout={() => setSession(null)} 
-            data={data} 
-            mutate={mutate} 
-            darkMode={darkMode} 
-            setDarkMode={setDarkMode} 
-          />
+          <TopBar session={session} online={online} onMenuClick={() => setMobileNavOpen(true)} onLogout={() => setSession(null)} data={data} mutate={mutate} />
           <main className="p-4 sm:p-6 max-w-6xl mx-auto">
             {page === "dashboard" && (session.role === "owner" || session.role === "manager") && (
-              <Dashboard data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
+              <Dashboard data={data} mutate={mutate} session={session} showToast={showToast} />
             )}
             {page === "warehouse" && (session.role === "owner" || session.role === "manager") && (
-              <WarehouseModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
+              <WarehouseModule data={data} mutate={mutate} session={session} showToast={showToast} />
             )}
             {page === "packing" && (session.role === "owner" || session.role === "manager") && (
-              <PackingModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
+              <PackingModule data={data} mutate={mutate} session={session} showToast={showToast} />
             )}
             {page === "production" && (session.role === "owner" || session.role === "manager") && (
-              <ProductionModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
+              <ProductionModule data={data} mutate={mutate} session={session} showToast={showToast} />
             )}
             {page === "sales" && (session.role !== "driver") && (
-              <SalesModule data={data} mutate={mutate} session={session} showToast={showToast} darkMode={darkMode} />
+              <SalesModule data={data} mutate={mutate} session={session} showToast={showToast} />
             )}
             {page === "reports" && (
-              <ReportsModule data={data} session={session} darkMode={darkMode} />
+              <ReportsModule data={data} session={session} />
             )}
             {page === "admin" && session.role === "owner" && (
-              <AdminManagementModule data={data} mutate={mutate} showToast={showToast} darkMode={darkMode} />
+              <AdminManagementModule data={data} mutate={mutate} showToast={showToast} />
             )}
-            {page === "audit" && session.role === "owner" && (
-              <AuditLog data={data} mutate={mutate} showToast={showToast} darkMode={darkMode} />
-            )}
+            {page === "audit" && session.role === "owner" && <AuditLog data={data} mutate={mutate} showToast={showToast} />}
           </main>
         </div>
       </div>
+
+      {showBusinessModal && (
+        <BusinessDetailsModal
+          initialDetails={data.businessDetails}
+          onSave={handleSaveBusinessDetails}
+          onSkip={() => setShowBusinessModal(false)}
+        />
+      )}
 
       {toast && <Toast msg={toast.msg} tone={toast.tone} />}
     </div>
@@ -329,7 +334,7 @@ export default function App() {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  STYLING & CSS TOOLKIT                                                 */
+/*  STYLING TOOLKIT & CSS INJECT                                            */
 /* ---------------------------------------------------------------------- */
 const CSS_TOOLKIT = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
@@ -340,17 +345,6 @@ const CSS_TOOLKIT = `
 .inp { width:100%; padding:0.55rem 0.75rem; border-radius:0.5rem; border:1px solid #DDE3DA; font-size:0.875rem; font-family:'IBM Plex Sans',sans-serif; outline:none; background:#FFFFFF; color:#16211F; }
 .inp:focus { border-color:#1C8C9E; box-shadow:0 0 0 3px rgba(28,140,158,0.15); }
 .inp:disabled { background:#E9ECE6; cursor:not-allowed; }
-
-.dark-mode .inp { background:#1F2937; border-color:#374151; color:#F9FAFB; }
-.dark-mode .inp:disabled { background:#111827; }
-.dark-mode .bg-white { background-color:#1F2937 !important; border-color:#374151 !important; color:#F9FAFB !important; }
-.dark-mode .bg-\[\#F2F4EF\] { background-color:#111827 !important; }
-.dark-mode .bg-\[\#F7F8F5\] { background-color:#374151 !important; color:#F9FAFB !important; }
-.dark-mode .text-\[\#0B3B45\] { color:#6EE7B7 !important; }
-.dark-mode .text-\[\#16211F\] { color:#F9FAFB !important; }
-.dark-mode .text-\[\#5B6B68\] { color:#9CA3AF !important; }
-.dark-mode .border-\[\#DDE3DA\] { border-color:#374151 !important; }
-
 .btn-primary { display:flex; align-items:center; justify-content:center; gap:0.4rem; background:#0B3B45; color:#F2F4EF; font-weight:600; font-size:0.875rem; padding:0.6rem 1rem; border-radius:0.5rem; transition:filter 0.15s; border:none; cursor:pointer; }
 .btn-primary:hover { filter:brightness(1.15); }
 .btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
@@ -366,29 +360,22 @@ const CSS_TOOLKIT = `
 @media print {
   body * { visibility: hidden; }
   #printable-area, #printable-area *, #printable-receipt, #printable-receipt * { visibility: visible; }
-  #printable-area { position: absolute; left: 0; top: 0; width: 100%; color: black !important; background: white !important; }
+  #printable-area { position: absolute; left: 0; top: 0; width: 100%; }
   #printable-receipt { position: absolute; left: 0; top: 0; width: 100%; max-width: 320px; margin: 0 auto; padding: 10px; background: white; color: black; }
   .no-print { display: none !important; }
 }
 `;
 
 /* ---------------------------------------------------------------------- */
-/*  LOGIN SCREEN WITH REGISTRATION & PASSWORD RESET                        */
+/*  LOGIN SCREEN                                                           */
 /* ---------------------------------------------------------------------- */
-function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword }) {
-  const users = data.users || [];
-  const superAdminRegistered = data.superAdminRegistered;
-
-  const [view, setView] = useState(!superAdminRegistered ? "register" : "login");
+function LoginScreen({ users = [], onLogin, onResetAdminPassword }) {
+  const [view, setView] = useState("login");
   const [selectedUser, setSelectedUser] = useState(users[0] || null);
   const [password, setPassword] = useState("");
   const [fullNameInput, setFullNameInput] = useState("");
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
-
-  const [regEmail, setRegEmail] = useState("");
-  const [regFullName, setRegFullName] = useState("");
-  const [regPassword, setRegPassword] = useState("");
 
   const [resetEmail, setResetEmail] = useState("");
   const [resetPassword, setResetPassword] = useState("");
@@ -398,21 +385,6 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
       setSelectedUser(users[0]);
     }
   }, [users, selectedUser]);
-
-  const handleRegisterSubmit = (e) => {
-    e.preventDefault();
-    if (regPassword.length < 6) {
-      setError("Password must be at least 6 characters long.");
-      return;
-    }
-    if (!regEmail.includes("@")) {
-      setError("Please enter a valid email address.");
-      return;
-    }
-    onRegisterSuperAdmin(regEmail, regFullName, regPassword);
-    setView("login");
-    setError("");
-  };
 
   const handleLoginSubmit = (e) => {
     e.preventDefault();
@@ -424,7 +396,7 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
     }
 
     if (!fullNameInput || fullNameInput.trim().toLowerCase() !== selectedUser.name.trim().toLowerCase()) {
-      setError("Full Name mismatch! Type exact full name for this role.");
+      setError("Full Name mismatch! Please type the exact full name for this role.");
       return;
     }
 
@@ -462,60 +434,9 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
           </div>
           <div className="text-left">
             <p className="font-display font-800 text-[#0B3B45] text-xl leading-none">Mattbees Water Services</p>
-            <p className="font-mono text-[10px] text-[#5B6B68] uppercase tracking-widest mt-0.5">Sachet Water Enterprise ERP</p>
+            <p className="font-mono text-[10px] text-[#5B6B68] uppercase tracking-widest mt-0.5">Offline-First Sachet ERP</p>
           </div>
         </div>
-
-        {view === "register" && (
-          <form onSubmit={handleRegisterSubmit} className="space-y-3">
-            <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
-              <p className="text-xs font-bold text-[#0B3B45]">One-Time Super Admin Registration</p>
-              <p className="text-[11px] text-[#5B6B68]">Setup primary Super Admin account to manage factory roles and security.</p>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Full Name</label>
-              <input
-                type="text"
-                value={regFullName}
-                onChange={(e) => { setRegFullName(e.target.value); setError(""); }}
-                placeholder="e.g. Emmanuel Mensah"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Email Address</label>
-              <input
-                type="email"
-                value={regEmail}
-                onChange={(e) => { setRegEmail(e.target.value); setError(""); }}
-                placeholder="admin@mattbeeswater.com"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Password (min 6 characters)</label>
-              <input
-                type="password"
-                value={regPassword}
-                onChange={(e) => { setRegPassword(e.target.value); setError(""); }}
-                placeholder="••••••••"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            {error && <p className="text-xs font-semibold text-[#C4472F]">{error}</p>}
-
-            <button type="submit" className="btn-primary w-full py-2.5 mt-2">
-              Register Super Admin Account
-            </button>
-          </form>
-        )}
 
         {view === "login" && (
           <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -535,7 +456,7 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
               >
                 {users.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {DEFAULT_ROLES[u.role]?.label || u.role} ({u.name})
+                    {ROLES[u.role]?.label || u.role} ({u.name})
                   </option>
                 ))}
               </select>
@@ -554,7 +475,7 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Password Verification</label>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Password Security Verification</label>
               <input
                 type="password"
                 value={password}
@@ -577,7 +498,7 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
                 onClick={() => { setView("forgot"); setError(""); setSuccessMsg(""); }}
                 className="text-xs text-gray-600 hover:underline flex items-center justify-center gap-1"
               >
-                <Mail size={13} /> Reset Admin Password via Registered Email
+                <Mail size={13} /> Admin Password Reset (Email Auth)
               </button>
             </div>
           </form>
@@ -585,9 +506,10 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
 
         {view === "forgot" && (
           <form onSubmit={handleForgot} className="space-y-3">
+            {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
             <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
               <p className="text-xs font-bold text-[#0B3B45]">Admin Password Recovery</p>
-              <p className="text-[11px] text-[#5B6B68]">Verify using registered Admin email to set a new password.</p>
+              <p className="text-[11px] text-[#5B6B68]">Authenticate using registered Admin email address to set a new password.</p>
             </div>
 
             <div>
@@ -596,19 +518,19 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
                 type="email"
                 value={resetEmail}
                 onChange={(e) => { setResetEmail(e.target.value); setError(""); }}
-                placeholder="admin@mattbeeswater.com"
+                placeholder="admin@gmail.com"
                 className="inp mt-1"
                 required
               />
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">New Password (min 6 characters)</label>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">New Secure Password</label>
               <input
                 type="password"
                 value={resetPassword}
                 onChange={(e) => setResetPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="Set new password"
                 className="inp mt-1"
                 required
               />
@@ -617,7 +539,7 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
             {error && <p className="text-xs font-semibold text-[#C4472F]">{error}</p>}
 
             <button type="submit" className="btn-primary w-full py-2.5 mt-2">
-              Verify Email & Set New Password
+              Authenticate Email & Reset Password
             </button>
 
             <button
@@ -625,27 +547,89 @@ function LoginScreen({ data, onLogin, onRegisterSuperAdmin, onResetAdminPassword
               onClick={() => { setView("login"); setError(""); }}
               className="w-full text-center text-xs text-gray-500 hover:underline mt-2"
             >
-              Back to Sign In
+              Back to Login
             </button>
           </form>
         )}
+
+        <p className="text-center text-[11px] font-mono text-[#5B6B68] mt-4">PWA ACTIVE · SUPABASE SYNC ENABLED</p>
       </div>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  SIDEBAR & TOPBAR NAVIGATION                                            */
+/*  BUSINESS DETAILS ONBOARDING / SETUP MODAL                              */
+/* ---------------------------------------------------------------------- */
+function BusinessDetailsModal({ initialDetails, onSave, onSkip }) {
+  const [name, setName] = useState(initialDetails?.name || "");
+  const [address, setAddress] = useState(initialDetails?.address || "");
+  const [phone, setPhone] = useState(initialDetails?.phone || "");
+  const [tin, setTin] = useState(initialDetails?.tin || "");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSave({ name, address, phone, tin });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-4">
+        <div className="flex items-center gap-2 border-b pb-3">
+          <Building className="text-[#0B3B45]" size={22} />
+          <div>
+            <h3 className="font-bold text-[#0B3B45] text-base">Register Business Details</h3>
+            <p className="text-xs text-gray-500">Provide company information for invoices and receipts.</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business / Company Name *</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ghana Pure Water Ltd" className="inp mt-1" required />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business Phone Number</label>
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +233 24 123 4567" className="inp mt-1" />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Business Address / Location</label>
+            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="e.g. Plot 12 Industrial Area, Accra" className="inp mt-1" />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Tax Identification Number (TIN / GRA)</label>
+            <input value={tin} onChange={(e) => setTin(e.target.value)} placeholder="e.g. C0001234567" className="inp mt-1" />
+          </div>
+
+          <div className="pt-2 flex flex-col gap-2">
+            <button type="submit" className="btn-primary w-full py-2.5">
+              Save Business Details
+            </button>
+            <button type="button" onClick={onSkip} className="text-xs text-gray-500 hover:underline text-center">
+              Register Business Details Later
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  NAVIGATION / SIDEBAR & TOPBAR                                           */
 /* ---------------------------------------------------------------------- */
 function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: Factory, roles: ["owner", "manager"] },
     { id: "warehouse", label: "Warehouse & Rolls", icon: Warehouse, roles: ["owner", "manager"] },
     { id: "packing", label: "Packing Bags", icon: PackageOpen, roles: ["owner", "manager"] },
-    { id: "production", label: "Production Floor", icon: Droplets, roles: ["owner", "manager"] },
-    { id: "sales", label: "Sales & Receipts", icon: Wallet, roles: ["owner", "manager", "cashier"] },
+    { id: "production", label: "Production", icon: Droplets, roles: ["owner", "manager"] },
+    { id: "sales", label: "Sales & Cash", icon: Wallet, roles: ["owner", "manager", "cashier"] },
     { id: "reports", label: "Reports & Drivers", icon: FileBarChart, roles: ["owner", "manager", "driver"] },
-    { id: "admin", label: "Admin & Roles", icon: KeyRound, roles: ["owner"] },
+    { id: "admin", label: "Admin & Users", icon: KeyRound, roles: ["owner"] },
     { id: "audit", label: "Audit Trail", icon: ShieldCheck, roles: ["owner"] },
   ];
   return (
@@ -657,7 +641,7 @@ function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
             <div className="w-8 h-8 rounded-lg bg-[#1C8C9E] flex items-center justify-center">
               <Droplets size={16} className="text-[#0B3B45]" />
             </div>
-            <p className="font-display font-800 text-[15px] text-[#F2F4EF]">Mattbees Water</p>
+            <p className="font-display font-800 text-[15px] text-[#F2F4EF]">Mattbees Water Services</p>
           </div>
           <button onClick={onClose} className="sm:hidden p-1 text-[#B9CFCE]"><X size={18} /></button>
         </div>
@@ -681,63 +665,98 @@ function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
   );
 }
 
-function TopBar({ session, online, onMenuClick, onLogout, data, mutate, darkMode, setDarkMode }) {
-  const Icon = DEFAULT_ROLES[session.role]?.icon || ShieldCheck;
+function TopBar({ session, online, onMenuClick, onLogout, data, mutate }) {
+  const Icon = ROLES[session.role]?.icon || ShieldCheck;
   const [notifOpen, setNotifOpen] = useState(false);
   const notifications = data.notifications || [];
   const unreadCount = notifications.filter((n) => !n.read).length;
 
+  const handleOpenNotifications = () => {
+    if (!notifOpen && unreadCount > 0) {
+      mutate((prev) => ({
+        ...prev,
+        notifications: (prev.notifications || []).map((n) => ({ ...n, read: true })),
+      }), "Read Notifications", "Marked all system notifications as read");
+    }
+    setNotifOpen(!notifOpen);
+  };
+
   return (
-    <div className={`sticky top-0 z-20 ${darkMode ? "bg-gray-800 border-gray-700" : "bg-[#F2F4EF] border-[#DDE3DA]"} border-b px-4 sm:px-6 py-3 flex items-center justify-between`}>
+    <div className="sticky top-0 z-20 bg-[#F2F4EF] border-b border-[#DDE3DA] px-4 sm:px-6 py-3 flex items-center justify-between">
       <div className="flex items-center gap-2.5">
-        <button onClick={onMenuClick} className={`sm:hidden w-8 h-8 rounded-lg border ${darkMode ? "border-gray-700 bg-gray-800 text-gray-200" : "border-[#DDE3DA] bg-white text-[#0B3B45]"} flex items-center justify-center`}>
+        <button onClick={onMenuClick} className="sm:hidden w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#0B3B45]">
           <Menu size={16} />
         </button>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-semibold ${online ? "bg-[#DCEEE4] text-[#2A6E4A]" : "bg-[#F5E3D9] text-[#A85A2A]"}`}>
           {online ? <Wifi size={12} /> : <WifiOff size={12} />}
-          <span>{online ? "ONLINE SYNCED" : "OFFLINE MODE"}</span>
+          <span>{online ? "ONLINE SYNCED" : "OFFLINE READY"}</span>
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button 
-          onClick={() => setDarkMode(!darkMode)} 
-          className={`w-8 h-8 rounded-lg border ${darkMode ? "border-gray-700 bg-gray-800 text-yellow-400" : "border-[#DDE3DA] bg-white text-gray-600"} flex items-center justify-center transition`}
-          title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-        >
-          {darkMode ? <Sun size={15} /> : <Moon size={15} />}
-        </button>
-
         <div className="text-right hidden sm:block">
           <p className="text-sm font-semibold">{session.name}</p>
-          <p className="text-[11px] text-[#5B6B68]">{DEFAULT_ROLES[session.role]?.label || session.role}</p>
+          <p className="text-[11px] text-[#5B6B68]">{ROLES[session.role]?.label || session.role}</p>
         </div>
         <div className="w-8 h-8 rounded-full bg-[#0B3B45] flex items-center justify-center text-white">
           <Icon size={14} />
         </div>
+        <div className="relative">
+          <button onClick={handleOpenNotifications} className="relative w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#0B3B45]">
+            <Bell size={15} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold bg-[#C4472F] text-white flex items-center justify-center">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+          {notifOpen && (
+            <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl border border-[#DDE3DA] shadow-xl z-50 p-3">
+              <div className="flex items-center justify-between pb-2 border-b border-[#EDEFEA]">
+                <p className="font-bold text-xs text-[#0B3B45]">System Notifications</p>
+                <button onClick={() => mutate((prev) => ({ ...prev, notifications: [] }), "Cleared Notifications", "")} className="text-[10px] text-[#C4472F]">Clear All</button>
+              </div>
+              <div className="max-h-60 overflow-y-auto space-y-2 mt-2">
+                {notifications.length === 0 ? <p className="text-xs text-gray-400 text-center py-4">No notifications</p> : (
+                  notifications.map((n) => (
+                    <div key={n.id} className="p-2 bg-[#F7F8F5] rounded text-xs border border-[#EDEFEA] relative">
+                      <div className="flex justify-between items-center">
+                        <p className="font-semibold text-[#0B3B45]">{n.title}</p>
+                        <span className="text-[9px] text-green-700 font-bold bg-green-100 px-1.5 py-0.5 rounded">Read</span>
+                      </div>
+                      <p className="text-gray-600 mt-1">{n.msg}</p>
+                      <span className="text-[9px] text-gray-400 font-mono mt-1 block">{n.ts}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        <button onClick={onLogout} className="w-8 h-8 rounded-lg border border-[#DDE3DA] bg-white flex items-center justify-center text-[#C4472F]">
+          <LogOut size={15} />
+        </button>
       </div>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  CALCULATIONS & COMPUTATIONS                                           */
+/*  BUSINESS LOGIC COMPUTATION HELPERS                                      */
 /* ---------------------------------------------------------------------- */
 function computeFinishedGoods(data) {
   const produced = (data.productionRuns || []).reduce((s, r) => s + (r.netAvailableBags || 0), 0);
   const sold = (data.sales || []).reduce((s, r) => s + (r.bagsSold || 0), 0);
-  const freeGiveaway = (data.sales || []).reduce((s, r) => s + (r.freeBags || 0), 0);
   return {
     totalProduced: produced,
     totalSold: sold,
-    totalFree: freeGiveaway,
-    availableForSale: Math.max(0, produced - sold - freeGiveaway),
+    availableForSale: Math.max(0, produced - sold),
   };
 }
 
 function computeManagerAcceptedRolls(data) {
-  const acceptedRolls = (data.issuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.physicalCount || i.qty || 0), 0);
-  const usedRolls = (data.productionRuns || []).reduce((s, p) => s + (p.rollsUsed || 0), 0);
-  return Math.max(0, acceptedRolls - usedRolls);
+  const accepted = (data.issuance || []).filter((i) => i.status === "ACCEPTED").reduce((s, i) => s + (i.weightKg || 0), 0);
+  const used = (data.productionRuns || []).reduce((s, p) => s + (p.weightUsedKg || 0), 0);
+  return Math.max(0, accepted - used);
 }
 
 function computeManagerAcceptedBags(data) {
@@ -751,159 +770,75 @@ function computeCashBalance(data) {
   const debtCash = (data.debtPayments || []).filter((p) => p.method === "cash").reduce((s, r) => s + (r.amount || 0), 0);
   const managerExpenses = (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0);
   const adminExpenses = (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0);
-  return cashSales + debtCash - managerExpenses - adminExpenses;
+  const deposits = (data.bankDeposits || []).reduce((s, d) => s + (d.amount || 0), 0);
+  return cashSales + debtCash - managerExpenses - adminExpenses - deposits;
 }
 
 /* ---------------------------------------------------------------------- */
-/*  ADMIN & MANUAL ROLE MANAGEMENT MODULE                                 */
+/*  AUDIT LOG COMPONENT                                                   */
 /* ---------------------------------------------------------------------- */
-function AdminManagementModule({ data, mutate, showToast }) {
-  const [newUserName, setNewUserName] = useState("");
-  const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserRole, setNewUserRole] = useState("manager");
-  const [newUserPassword, setNewUserPassword] = useState("");
-  const [newCategoryName, setNewCategoryName] = useState("");
+function AuditLog({ data, mutate, showToast }) {
+  const logs = data.auditLog || [];
 
-  const handleAddUser = (e) => {
-    e.preventDefault();
-    if (!newUserName.trim() || !newUserPassword) {
-      return showToast("Name and Password are required!", "warn");
+  const handleResetAuditLog = () => {
+    if (window.confirm("Are you sure you want to reset and clear the entire Audit Log?")) {
+      mutate((prev) => ({
+        ...prev,
+        auditLog: [],
+      }), "Reset Audit Log", "Cleared all system audit log entries");
+      showToast("Audit log cleared successfully!");
     }
-    if (newUserPassword.length < 6) {
-      return showToast("Password must be at least 6 characters!", "warn");
-    }
-
-    const newUser = {
-      id: uid(),
-      name: newUserName.trim(),
-      role: newUserRole,
-      password: newUserPassword,
-      email: newUserEmail.trim().toLowerCase(),
-    };
-
-    mutate((prev) => ({
-      ...prev,
-      users: [...(prev.users || []), newUser],
-    }), "Added User Role", `Assigned ${newUserName} as ${newUserRole}`);
-
-    setNewUserName(""); setNewUserEmail(""); setNewUserPassword("");
-    showToast("Role Account Created Successfully!");
   };
 
-  const handleAddExpenseCategory = (e) => {
-    e.preventDefault();
-    if (!newCategoryName.trim()) return;
-
-    if ((data.expenseCategories || []).includes(newCategoryName.trim())) {
-      return showToast("Category already exists!", "warn");
-    }
-
-    mutate((prev) => ({
-      ...prev,
-      expenseCategories: [...(prev.expenseCategories || []), newCategoryName.trim()],
-    }), "Added Expense Category", newCategoryName.trim());
-
-    setNewCategoryName("");
-    showToast("Expense Category Added!");
+  const handlePrintAuditLog = () => {
+    window.print();
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin & Role Management</p>
-        <p className="text-sm text-[#5B6B68]">Add system users, assign roles manually, and configure expense categories.</p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
-          <p className="font-bold text-[#0B3B45] text-base">Add User & Assign Role Manually</p>
-          <form onSubmit={handleAddUser} className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Full Name *</label>
-              <input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} placeholder="e.g. John Mensah" className="inp mt-1" required />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Email Address (Optional)</label>
-              <input type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} placeholder="john@mattbeeswater.com" className="inp mt-1" />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Assign System Role *</label>
-              <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)} className="inp mt-1">
-                <option value="owner">Business Owner (Super Admin)</option>
-                <option value="manager">Factory Manager</option>
-                <option value="cashier">Plant Cashier</option>
-                <option value="driver">Delivery Driver</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Password (min 6 characters) *</label>
-              <input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} placeholder="••••••••" className="inp mt-1" required />
-            </div>
-
-            <button type="submit" className="btn-primary w-full py-2.5">
-              <Plus size={16} /> Create User Account
-            </button>
-          </form>
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <p className="font-display font-800 text-2xl text-[#0B3B45]">System Audit Trail</p>
+          <p className="text-sm text-[#5B6B68]">Track all operational actions, data updates, and security events.</p>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
-          <p className="font-bold text-[#0B3B45] text-base">Expense Categories Configuration</p>
-          <form onSubmit={handleAddExpenseCategory} className="flex gap-2">
-            <input value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} placeholder="e.g. Electricity & Water" className="inp" required />
-            <button type="submit" className="btn-primary shrink-0 py-2">Add Category</button>
-          </form>
-
-          <div className="mt-3 space-y-1.5 max-h-56 overflow-y-auto">
-            {(data.expenseCategories || []).map((cat, idx) => (
-              <div key={idx} className="flex justify-between items-center p-2 bg-[#F7F8F5] rounded text-xs font-semibold">
-                <span>{cat}</span>
-              </div>
-            ))}
-          </div>
+        <div className="flex gap-2 no-print">
+          <button onClick={handlePrintAuditLog} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
+            <Printer size={14} /> Print Audit Log
+          </button>
+          <button onClick={handleResetAuditLog} className="btn-primary py-1.5 px-3 text-xs bg-[#C4472F] hover:bg-red-800">
+            <RotateCcw size={14} /> Reset Audit Log
+          </button>
         </div>
       </div>
 
-      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3 text-base">Registered System Accounts & Roles</p>
+      <div id="printable-area" className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Name</th>
-              <th className="p-2">Email</th>
+              <th className="p-2">Timestamp</th>
+              <th className="p-2">User</th>
               <th className="p-2">Role</th>
-              <th className="p-2 text-right">Actions</th>
+              <th className="p-2">Action</th>
+              <th className="p-2">Details</th>
             </tr>
           </thead>
           <tbody>
-            {(data.users || []).map((u) => (
-              <tr key={u.id} className="border-t">
-                <td className="p-2 font-bold text-[#0B3B45]">{u.name}</td>
-                <td className="p-2 font-mono text-gray-500">{u.email || "N/A"}</td>
-                <td className="p-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-800">
-                    {DEFAULT_ROLES[u.role]?.label || u.role}
-                  </span>
-                </td>
-                <td className="p-2 text-right">
-                  {u.id !== "u1" && (
-                    <button 
-                      onClick={() => {
-                        if (window.confirm(`Delete user account for ${u.name}?`)) {
-                          mutate((prev) => ({ ...prev, users: (prev.users || []).filter((x) => x.id !== u.id) }), "Deleted User", u.name);
-                          showToast("User account removed!");
-                        }
-                      }} 
-                      className="text-red-600 hover:text-red-800"
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  )}
-                </td>
+            {logs.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="p-4 text-center text-gray-400">No audit logs recorded yet.</td>
               </tr>
-            ))}
+            ) : (
+              logs.map((log) => (
+                <tr key={log.id} className="border-t">
+                  <td className="p-2 font-mono text-gray-500">{new Date(log.ts).toLocaleString()}</td>
+                  <td className="p-2 font-semibold text-[#0B3B45]">{log.user}</td>
+                  <td className="p-2 uppercase text-[10px] font-mono">{log.role}</td>
+                  <td className="p-2 font-bold text-blue-900">{log.action}</td>
+                  <td className="p-2 text-gray-600">{log.detail}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -912,28 +847,26 @@ function AdminManagementModule({ data, mutate, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  DASHBOARD MODULE WITH GROUPED EXPENSES                                */
+/*  DASHBOARD MODULE                                                        */
 /* ---------------------------------------------------------------------- */
 function Dashboard({ data, mutate, session, showToast }) {
   const isOwner = session.role === "owner";
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
-  const managerRollsCount = useMemo(() => computeManagerAcceptedRolls(data), [data]);
+  const managerRollsKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
   const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
   const cashOnHand = useMemo(() => computeCashBalance(data), [data]);
 
-  const categories = data.expenseCategories || ["Raw Material", "Utilities", "Maintenance", "Transport & Fuel", "Salaries & Wages", "Tax & GRA", "General Admin", "Miscellaneous"];
+  const managersList = useMemo(() => (data.users || []).filter((u) => u.role === "manager"), [data.users]);
 
   const [expenseDesc, setExpenseDesc] = useState("");
-  const [expenseCategory, setExpenseCategory] = useState(categories[0] || "General Admin");
   const [expenseAmt, setExpenseAmt] = useState("");
 
   const [adminExpenseDesc, setAdminExpenseDesc] = useState("");
-  const [adminExpenseCategory, setAdminExpenseCategory] = useState(categories[0] || "General Admin");
   const [adminExpenseAmt, setAdminExpenseAmt] = useState("");
 
   const handleLogExpense = (e) => {
     e.preventDefault();
-    if (Number(expenseAmt) <= 0) return showToast("Enter a valid expense amount!", "warn");
+    if (Number(expenseAmt) <= 0) return showToast("Enter a positive expense amount!", "warn");
 
     mutate((prev) => ({
       ...prev,
@@ -941,22 +874,21 @@ function Dashboard({ data, mutate, session, showToast }) {
         {
           id: uid(),
           date: todayISO(),
-          category: expenseCategory,
           description: expenseDesc,
           amount: Number(expenseAmt),
           recordedBy: session.name,
         },
         ...(prev.expenses || []),
       ],
-    }), "Logged Manager Expense", `GH₵ ${expenseAmt} for ${expenseDesc} (${expenseCategory})`);
+    }), "Logged Expense", `GH₵ ${expenseAmt} for ${expenseDesc}`);
 
     setExpenseDesc(""); setExpenseAmt("");
-    showToast("Expense Recorded!");
+    showToast("Manager Expense Recorded!");
   };
 
   const handleLogAdminExpense = (e) => {
     e.preventDefault();
-    if (Number(adminExpenseAmt) <= 0) return showToast("Enter a valid expense amount!", "warn");
+    if (Number(adminExpenseAmt) <= 0) return showToast("Enter a positive expense amount!", "warn");
 
     mutate((prev) => ({
       ...prev,
@@ -964,116 +896,226 @@ function Dashboard({ data, mutate, session, showToast }) {
         {
           id: uid(),
           date: todayISO(),
-          category: adminExpenseCategory,
           description: adminExpenseDesc,
           amount: Number(adminExpenseAmt),
           recordedBy: session.name,
         },
         ...(prev.adminExpenses || []),
       ],
-    }), "Logged Admin Expense", `GH₵ ${adminExpenseAmt} for ${adminExpenseDesc} (${adminExpenseCategory})`);
+    }), "Logged Admin Expense", `GH₵ ${adminExpenseAmt} for ${adminExpenseDesc}`);
 
     setAdminExpenseDesc(""); setAdminExpenseAmt("");
-    showToast("Admin Expense Recorded!");
+    showToast("Admin Expense Recorded & Balanced!");
   };
 
-  const expensesByCategory = useMemo(() => {
-    const combined = [
-      ...(data.expenses || []),
-      ...(data.adminExpenses || []),
-    ];
-    const grouped = {};
-    combined.forEach((e) => {
-      const cat = e.category || "General Admin";
-      grouped[cat] = (grouped[cat] || 0) + (e.amount || 0);
-    });
-    return grouped;
-  }, [data.expenses, data.adminExpenses]);
+  const allTimeRollIntakePcs = useMemo(() => (data.intake || []).reduce((s, i) => s + (i.qty || 0), 0), [data.intake]);
+  const allTimeRollIssuancePcs = useMemo(() => (data.issuance || []).reduce((s, i) => s + (i.qty || 0), 0), [data.issuance]);
+  const ownerRollBalancePcs = Math.max(0, allTimeRollIntakePcs - allTimeRollIssuancePcs);
 
-  const totalExpensesGHS = useMemo(() => {
-    return Object.values(expensesByCategory).reduce((s, a) => s + a, 0);
-  }, [expensesByCategory]);
+  const allTimeRollIntakeKg = useMemo(() => (data.intake || []).reduce((s, i) => s + (i.weightKg || 0), 0), [data.intake]);
+  const allTimeRollIssuanceKg = useMemo(() => (data.issuance || []).reduce((s, i) => s + (i.weightKg || 0), 0), [data.issuance]);
+  const ownerRollBalanceKg = Math.max(0, allTimeRollIntakeKg - allTimeRollIssuanceKg);
+
+  const allTimeBagIntakeQty = useMemo(() => (data.bagIntake || []).reduce((s, i) => s + (i.qty || 0), 0), [data.bagIntake]);
+  const allTimeBagIssuanceQty = useMemo(() => (data.bagIssuance || []).reduce((s, i) => s + (i.qty || 0), 0), [data.bagIssuance]);
+  const ownerBagBalanceQty = Math.max(0, allTimeBagIntakeQty - allTimeBagIssuanceQty);
+
+  const totalManagerExpensesGHS = useMemo(() => (data.expenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.expenses]);
+  const totalAdminExpensesGHS = useMemo(() => (data.adminExpenses || []).reduce((s, e) => s + (e.amount || 0), 0), [data.adminExpenses]);
+  const totalAllExpensesGHS = totalManagerExpensesGHS + totalAdminExpensesGHS;
+
+  const managerMetrics = useMemo(() => {
+    return managersList.map((mgr) => {
+      const runs = (data.productionRuns || []).filter((r) => r.recordedBy === mgr.name);
+      const rollKgUsed = runs.reduce((s, r) => s + (r.weightUsedKg || 0), 0);
+      const rollsCountUsed = Math.round(rollKgUsed / 25);
+
+      const bagUsages = (data.bagUsage || []).filter((u) => u.usedBy === mgr.name);
+      const bagsUsedQty = bagUsages.reduce((s, u) => s + (u.qty || 0), 0);
+
+      const factorySales = (data.sales || []).filter((s) => s.recordedBy === mgr.name);
+      const factorySalesBags = factorySales.reduce((s, f) => s + f.bagsSold, 0);
+      const factorySalesGHS = factorySales.reduce((s, f) => s + f.totalAmount, 0);
+
+      const mgrExpenses = (data.expenses || []).filter((e) => e.recordedBy === mgr.name);
+      const totalExpensesGHS = mgrExpenses.reduce((s, e) => s + e.amount, 0);
+
+      return {
+        managerName: mgr.name,
+        rollKgUsed,
+        rollsCountUsed,
+        bagsUsedQty,
+        factorySalesBags,
+        factorySalesGHS,
+        totalExpensesGHS,
+      };
+    });
+  }, [managersList, data.productionRuns, data.bagUsage, data.sales, data.expenses]);
 
   return (
     <div className="space-y-6">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Welcome back, {session.name}</p>
-        <p className="text-sm text-[#5B6B68]">Mattbees Water Operations · {isOwner ? "Super Admin Control Center" : "Manager Overview"}</p>
+        <p className="text-sm text-[#5B6B68]">Sachet Water Operational Overview · {isOwner ? "Super Admin Dashboard" : "Manager Dashboard"}</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard icon={Droplets} label="Available Sachet Bags" value={`${fmt(finished.availableForSale, 0)} bags`} accent="#2A6E4A" />
-        <StatCard icon={Warehouse} label="Manager Floor Rolls" value={`${fmt(managerRollsCount, 0)} rolls`} accent="#1C8C9E" />
+        <StatCard icon={Droplets} label="Sachet Bags Produce (Available)" value={`${fmt(finished.availableForSale, 0)} bags`} accent="#2A6E4A" />
+        <StatCard icon={Warehouse} label="Manager Floor Rolls" value={`${fmt(managerRollsKg)} kg`} accent="#1C8C9E" />
         <StatCard icon={PackageOpen} label="Manager Packing Bags" value={`${fmt(managerBagsQty, 0)} pcs`} accent="#E8A23D" />
         <StatCard icon={Wallet} label="Cash On Hand Balance" value={fmtGHS(cashOnHand)} accent={cashOnHand < 0 ? "#C4472F" : "#0B3B45"} />
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <p className="font-bold text-[#0B3B45]">Record Expense Entry</p>
-          <form onSubmit={isOwner ? handleLogAdminExpense : handleLogExpense} className="space-y-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Expense Category</label>
-              <select value={isOwner ? adminExpenseCategory : expenseCategory} onChange={(e) => isOwner ? setAdminExpenseCategory(e.target.value) : setExpenseCategory(e.target.value)} className="inp">
-                {categories.map((c, i) => (
-                  <option key={i} value={c}>{c}</option>
-                ))}
-              </select>
+      {isOwner ? (
+        <div className="space-y-6">
+          <div className="grid lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-1 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="text-[#0B3B45]" size={20} />
+                <p className="font-bold text-[#0B3B45]">Log Admin Expense</p>
+              </div>
+              <form onSubmit={handleLogAdminExpense} className="space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Expense Description</label>
+                  <input value={adminExpenseDesc} onChange={(e) => setAdminExpenseDesc(e.target.value)} placeholder="e.g. Executive travel / GRA Tax" className="inp" required />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Amount (GH₵)</label>
+                  <input type="number" min="0.01" step="0.01" value={adminExpenseAmt} onChange={(e) => setAdminExpenseAmt(e.target.value)} placeholder="e.g. 500" className="inp" required />
+                </div>
+                <button type="submit" className="btn-primary w-full">Record Admin Expense</button>
+              </form>
+            </div>
+
+            <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+              <p className="font-bold text-[#0B3B45] text-base">All Expenses Balancing & Automated Expense Ledger</p>
+              <div className="grid sm:grid-cols-3 gap-3">
+                <div className="p-3 bg-[#F7F8F5] rounded-xl border border-[#EDEFEA]">
+                  <p className="text-[11px] font-semibold text-gray-500">Manager Expenses</p>
+                  <p className="text-lg font-mono font-bold text-[#0B3B45] mt-1">{fmtGHS(totalManagerExpensesGHS)}</p>
+                </div>
+                <div className="p-3 bg-[#EAF3F1] rounded-xl border border-[#BFDCD6]">
+                  <p className="text-[11px] font-semibold text-[#0B3B45]">Admin Expenses</p>
+                  <p className="text-lg font-mono font-bold text-[#1C8C9E] mt-1">{fmtGHS(totalAdminExpensesGHS)}</p>
+                </div>
+                <div className="p-3 bg-[#FBEAE5] rounded-xl border border-[#EFC3B7]">
+                  <p className="text-[11px] font-semibold text-[#C4472F]">Total System Expenses</p>
+                  <p className="text-lg font-mono font-bold text-[#C4472F] mt-1">{fmtGHS(totalAllExpensesGHS)}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto max-h-44 mt-2">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-[#F7F8F5] text-left">
+                      <th className="p-2">Date</th>
+                      <th className="p-2">Category</th>
+                      <th className="p-2">Recorded By</th>
+                      <th className="p-2">Description</th>
+                      <th className="p-2 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ...(data.adminExpenses || []).map((e) => ({ ...e, type: "Admin" })),
+                      ...(data.expenses || []).map((e) => ({ ...e, type: "Manager" })),
+                    ].sort((a, b) => new Date(b.date) - new Date(a.date)).map((e) => (
+                      <tr key={e.id} className="border-t">
+                        <td className="p-2 font-mono">{e.date}</td>
+                        <td className="p-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${e.type === "Admin" ? "bg-cyan-100 text-cyan-800" : "bg-gray-100 text-gray-800"}`}>
+                            {e.type}
+                          </span>
+                        </td>
+                        <td className="p-2 font-semibold text-blue-900">{e.recordedBy}</td>
+                        <td className="p-2">{e.description}</td>
+                        <td className="p-2 text-right font-mono font-bold text-red-700">{fmtGHS(e.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+            <p className="font-bold text-[#0B3B45] text-base">All-Time Intake Automation, Issuance & Warehouse Balances</p>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="p-4 bg-[#F7F8F5] rounded-xl border space-y-2">
+                <p className="font-bold text-xs text-[#0B3B45] uppercase">Film Rolls Inventory Ledger</p>
+                <div className="flex justify-between text-xs"><span>All-time Intake (Roll Count):</span><span className="font-mono font-bold">{fmt(allTimeRollIntakePcs, 0)} rolls</span></div>
+                <div className="flex justify-between text-xs text-blue-800"><span>Issued to Manager (Roll Count):</span><span className="font-mono font-bold">{fmt(allTimeRollIssuancePcs, 0)} rolls</span></div>
+                <div className="flex justify-between text-xs text-green-800 pt-1 border-t font-bold"><span>Owner Warehouse Roll Count Balance:</span><span className="font-mono">{fmt(ownerRollBalancePcs, 0)} rolls</span></div>
+                <div className="flex justify-between text-xs text-gray-500 pt-1 border-t"><span>All-time Intake Weight:</span><span className="font-mono">{fmt(allTimeRollIntakeKg)} kg</span></div>
+                <div className="flex justify-between text-xs text-gray-500"><span>Issued Weight to Manager:</span><span className="font-mono">{fmt(allTimeRollIssuanceKg)} kg</span></div>
+                <div className="flex justify-between text-xs text-gray-700 font-semibold"><span>Owner Warehouse Weight Balance:</span><span className="font-mono">{fmt(ownerRollBalanceKg)} kg</span></div>
+              </div>
+
+              <div className="p-4 bg-[#F7F8F5] rounded-xl border space-y-2">
+                <p className="font-bold text-xs text-[#0B3B45] uppercase">Packing Bags Inventory Ledger</p>
+                <div className="flex justify-between text-xs"><span>All-time Intake (Owner):</span><span className="font-mono font-bold">{fmt(allTimeBagIntakeQty, 0)} pcs</span></div>
+                <div className="flex justify-between text-xs text-blue-800"><span>Issued to Manager:</span><span className="font-mono font-bold">{fmt(allTimeBagIssuanceQty, 0)} pcs</span></div>
+                <div className="flex justify-between text-xs text-green-800 pt-1 border-t font-bold"><span>Owner Warehouse Balance:</span><span className="font-mono">{fmt(ownerBagBalanceQty, 0)} pcs</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+            <p className="font-bold text-[#0B3B45] text-base">Manager Operational Metrics & Factory Direct Sales</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-[#F7F8F5] text-left">
+                    <th className="p-2">Manager Name</th>
+                    <th className="p-2 text-right">Rolls Used (approx pcs)</th>
+                    <th className="p-2 text-right">Rolls Used (kg)</th>
+                    <th className="p-2 text-right">Packing Bags Used (pcs)</th>
+                    <th className="p-2 text-right">Factory Direct Sales (Bags)</th>
+                    <th className="p-2 text-right">Factory Sales Revenue</th>
+                    <th className="p-2 text-right">Logged Expenses</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {managerMetrics.map((m, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="p-2 font-bold text-[#0B3B45]">{m.managerName}</td>
+                      <td className="p-2 text-right font-mono">{m.rollsCountUsed} rolls</td>
+                      <td className="p-2 text-right font-mono">{m.rollKgUsed} kg</td>
+                      <td className="p-2 text-right font-mono">{m.bagsUsedQty} pcs</td>
+                      <td className="p-2 text-right font-mono font-bold text-blue-900">{m.factorySalesBags} bags</td>
+                      <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(m.factorySalesGHS)}</td>
+                      <td className="p-2 text-right font-mono font-bold text-red-700">{fmtGHS(m.totalExpensesGHS)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <form onSubmit={handleLogExpense} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3 max-w-lg">
+            <div className="flex items-center gap-2">
+              <DollarSign className="text-[#0B3B45]" size={18} />
+              <p className="font-bold text-[#0B3B45]">Record Operational Expense (Manager Entry)</p>
             </div>
             <div>
-              <label className="text-xs font-semibold text-gray-500">Description</label>
-              <input value={isOwner ? adminExpenseDesc : expenseDesc} onChange={(e) => isOwner ? setAdminExpenseDesc(e.target.value) : setExpenseDesc(e.target.value)} placeholder="e.g. Fuel for generator" className="inp" required />
+              <label className="text-xs font-semibold text-gray-500">Expense Description</label>
+              <input value={expenseDesc} onChange={(e) => setExpenseDesc(e.target.value)} placeholder="e.g. Factory fuel / generator maintenance" className="inp" required />
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500">Amount (GH₵)</label>
-              <input type="number" min="0.01" step="0.01" value={isOwner ? adminExpenseAmt : expenseAmt} onChange={(e) => isOwner ? setAdminExpenseAmt(e.target.value) : setExpenseAmt(e.target.value)} placeholder="e.g. 250" className="inp" required />
+              <input type="number" min="0.01" step="0.01" value={expenseAmt} onChange={(e) => setExpenseAmt(e.target.value)} placeholder="e.g. 150" className="inp" required />
             </div>
-            <button type="submit" className="btn-primary w-full">Record Expense</button>
+            <button type="submit" className="btn-primary w-full">Log Expense to Admin</button>
           </form>
-        </div>
 
-        <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
-          <div className="flex justify-between items-center border-b pb-2">
-            <p className="font-bold text-[#0B3B45] text-base">Grouped Expenses by Category</p>
-            <p className="text-sm font-mono font-bold text-red-600">Total: {fmtGHS(totalExpensesGHS)}</p>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {Object.entries(expensesByCategory).map(([cat, amount], idx) => (
-              <div key={idx} className="p-3 bg-[#F7F8F5] rounded-xl border border-[#EDEFEA]">
-                <p className="text-[10px] font-bold text-gray-500 uppercase truncate">{cat}</p>
-                <p className="text-sm font-mono font-bold text-[#0B3B45] mt-1">{fmtGHS(amount)}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="overflow-x-auto max-h-48 pt-2">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-[#F7F8F5] text-left">
-                  <th className="p-2">Date</th>
-                  <th className="p-2">Category</th>
-                  <th className="p-2">Description</th>
-                  <th className="p-2 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ...(data.adminExpenses || []),
-                  ...(data.expenses || []),
-                ].sort((a, b) => new Date(b.date) - new Date(a.date)).map((e) => (
-                  <tr key={e.id} className="border-t">
-                    <td className="p-2 font-mono">{e.date}</td>
-                    <td className="p-2 font-semibold text-blue-900">{e.category || "General Admin"}</td>
-                    <td className="p-2">{e.description}</td>
-                    <td className="p-2 text-right font-mono font-bold text-red-700">{fmtGHS(e.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="bg-[#EAF3F1] p-4 rounded-xl border border-[#BFDCD6]">
+            <p className="font-bold text-sm text-[#0B3B45]">Notice to Manager:</p>
+            <p className="text-xs text-[#5B6B68] mt-1">Raw material intake is controlled by the Owner. Rolls and Packing Bags issued to you require explicit physical confirmation before being released to production.</p>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -1091,7 +1133,7 @@ function StatCard({ icon: Icon, label, value, accent }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  WAREHOUSE & FILM ROLLS MODULE                                         */
+/*  WAREHOUSE & ROLLS MODULE                                               */
 /* ---------------------------------------------------------------------- */
 function WarehouseModule({ data, mutate, session, showToast }) {
   const isOwner = session.role === "owner";
@@ -1101,10 +1143,10 @@ function WarehouseModule({ data, mutate, session, showToast }) {
     <div className="space-y-5">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Warehouse & Film Rolls</p>
-        <p className="text-sm text-[#5B6B68]">Manage raw rolls intake, transfers, and manager roll acceptance in unit roll counts.</p>
+        <p className="text-sm text-[#5B6B68]">Manage raw rolls intake, transfers, and manager stock acceptance.</p>
       </div>
 
-      <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
+      <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit overflow-x-auto">
         {isOwner && <button onClick={() => setTab("intake")} className={`px-3 py-1.5 rounded-lg text-sm ${tab === "intake" ? "bg-[#0B3B45] text-white font-bold" : "text-gray-600"}`}>Owner Roll Intake</button>}
         {isOwner && <button onClick={() => setTab("issue")} className={`px-3 py-1.5 rounded-lg text-sm ${tab === "issue" ? "bg-[#0B3B45] text-white font-bold" : "text-gray-600"}`}>Issue Rolls to Manager</button>}
         <button onClick={() => setTab("accept")} className={`px-3 py-1.5 rounded-lg text-sm ${tab === "accept" ? "bg-[#0B3B45] text-white font-bold" : "text-gray-600"}`}>Manager Roll Acceptance</button>
@@ -1136,7 +1178,16 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
       if (!rollTypeName.trim() || weightPerRoll <= 0) {
         return showToast("Provide a valid Roll Type Name and Weight per roll!", "warn");
       }
-      typeId = uid();
+      const existing = (data.rollTypes || []).find(
+        (t) => t.name.trim().toLowerCase() === rollTypeName.trim().toLowerCase()
+      );
+      if (existing) {
+        typeId = existing.id;
+        typeName = existing.name;
+        weightPerRoll = existing.standardWeightKg;
+      } else {
+        typeId = uid();
+      }
     } else {
       const existing = (data.rollTypes || []).find((t) => t.id === selectedTypeId);
       if (existing) {
@@ -1149,7 +1200,7 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
       const rollTypeExists = (prev.rollTypes || []).some((t) => t.id === typeId);
       const nextRollTypes = rollTypeExists
         ? prev.rollTypes
-        : [...(prev.rollTypes || []), { id: typeId, name: typeName.trim(), standardWeightKg: weightPerRoll }];
+        : [...(prev.rollTypes || []), { id: typeId, name: typeName.trim(), standardWeightKg: weightPerRoll, yieldValue: 900 }];
 
       return {
         ...prev,
@@ -1162,7 +1213,7 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
     }, "Recorded Roll Intake", `${qty} rolls of ${typeName}`);
 
     setRollTypeName(""); setKgPerRoll(""); setSupplier(""); setQty(""); setSelectedTypeId("new");
-    showToast("Roll Intake Saved!");
+    showToast("Roll Intake Recorded!");
   };
 
   return (
@@ -1172,10 +1223,20 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
 
         <div>
           <label className="text-xs font-semibold text-gray-500">Roll Category</label>
-          <select value={selectedTypeId} onChange={(e) => setSelectedTypeId(e.target.value)} className="inp">
+          <select
+            value={selectedTypeId}
+            onChange={(e) => {
+              setSelectedTypeId(e.target.value);
+              if (e.target.value !== "new") {
+                const existing = (data.rollTypes || []).find((t) => t.id === e.target.value);
+                if (existing) setKgPerRoll(String(existing.standardWeightKg));
+              }
+            }}
+            className="inp"
+          >
             <option value="new">+ Create New Roll Type</option>
             {(data.rollTypes || []).map((t) => (
-              <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg/roll)</option>
+              <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg)</option>
             ))}
           </select>
         </div>
@@ -1183,30 +1244,39 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
         {selectedTypeId === "new" && (
           <div>
             <label className="text-xs font-semibold text-gray-500">New Roll Type Name</label>
-            <input value={rollTypeName} onChange={(e) => setRollTypeName(e.target.value)} placeholder="e.g. Standard 25kg Film" className="inp" required />
+            <input value={rollTypeName} onChange={(e) => setRollTypeName(e.target.value)} placeholder="e.g. Standard 25kg Film" className="inp" required={selectedTypeId === "new"} />
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs font-semibold text-gray-500">Weight per Roll (kg)</label>
-            <input type="number" min="0.1" step="0.1" value={kgPerRoll} onChange={(e) => setKgPerRoll(e.target.value)} placeholder="25" className="inp" required={selectedTypeId === "new"} disabled={selectedTypeId !== "new"} />
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={kgPerRoll}
+              onChange={(e) => setKgPerRoll(e.target.value)}
+              placeholder="25"
+              className="inp"
+              disabled={selectedTypeId !== "new"}
+            />
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-500">Roll Count (Quantity)</label>
+            <label className="text-xs font-semibold text-gray-500">Quantity Rolls (Roll Count)</label>
             <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="10" className="inp" required />
           </div>
         </div>
 
         <div>
-          <label className="text-xs font-semibold text-gray-500">Supplier Name</label>
+          <label className="text-xs font-semibold text-gray-500">Supplier Name (Hidden from Manager)</label>
           <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="e.g. Polytank Ghana" className="inp" />
         </div>
         <button type="submit" className="btn-primary w-full"><Plus size={15} /> Save Intake</button>
       </form>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Roll Stock Intake Ledger</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Owner Stock Ledger (Includes Suppliers)</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
@@ -1222,7 +1292,7 @@ function OwnerRollIntakeTab({ data, mutate, showToast }) {
               <tr key={r.id} className="border-t">
                 <td className="p-2 font-mono">{r.date}</td>
                 <td className="p-2 font-semibold">{(data.rollTypes || []).find((t) => t.id === r.rollTypeId)?.name || "Film"}</td>
-                <td className="p-2 text-blue-800">{r.supplier || "N/A"}</td>
+                <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
                 <td className="p-2 text-right font-mono font-bold">{r.qty} rolls</td>
                 <td className="p-2 text-right font-mono">{r.weightKg} kg</td>
               </tr>
@@ -1238,12 +1308,20 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
   const [rollTypeId, setRollTypeId] = useState(data.rollTypes[0]?.id || "");
   const [qty, setQty] = useState("");
 
+  useEffect(() => {
+    if ((data.rollTypes || []).length > 0 && !rollTypeId) {
+      setRollTypeId(data.rollTypes[0].id);
+    }
+  }, [data.rollTypes, rollTypeId]);
+
   const handleIssue = (e) => {
     e.preventDefault();
-    if (Number(qty) <= 0) return showToast("Enter a valid roll count!", "warn");
+    if (Number(qty) <= 0) return showToast("Enter a positive quantity!", "warn");
 
     const rType = (data.rollTypes || []).find((t) => t.id === rollTypeId);
-    const weightKg = Number(qty) * (rType?.standardWeightKg || 25);
+    if (!rType) return showToast("Select a valid roll type", "warn");
+
+    const weightKg = Number(qty) * rType.standardWeightKg;
 
     mutate((prev) => ({
       ...prev,
@@ -1256,13 +1334,15 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
           weightKg,
           status: "PENDING",
           issuedBy: session.name,
+          confirmedBy: null,
+          physicalCount: null,
         },
         ...(prev.issuance || []),
       ],
-    }), "Issued Rolls", `${qty} rolls issued to Manager`);
+    }), "Issued Rolls to Manager", `${qty} rolls issued to Manager`);
 
     setQty("");
-    showToast("Rolls Issued to Manager!");
+    showToast("Rolls Issued! Pending Manager Confirmation.");
   };
 
   return (
@@ -1270,7 +1350,7 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
       <p className="font-bold text-[#0B3B45]">Issue Film Rolls to Manager</p>
       <form onSubmit={handleIssue} className="space-y-3">
         <div>
-          <label className="text-xs font-semibold text-gray-500">Roll Type</label>
+          <label className="text-xs font-semibold text-gray-500">Select Roll Type</label>
           <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
             {(data.rollTypes || []).map((t) => (
               <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg/roll)</option>
@@ -1278,53 +1358,67 @@ function IssueRollsTab({ data, mutate, session, showToast }) {
           </select>
         </div>
         <div>
-          <label className="text-xs font-semibold text-gray-500">Roll Count to Issue</label>
-          <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="e.g. 5" className="inp" required />
+          <label className="text-xs font-semibold text-gray-500">Number of Rolls to Issue (Roll Count)</label>
+          <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="5" className="inp" required />
         </div>
-        <button type="submit" className="btn-primary w-full">Transfer Rolls to Manager</button>
+        <button type="submit" className="btn-primary w-full">Transfer Rolls to Production Floor</button>
       </form>
     </div>
   );
 }
 
 function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
-  const managerAcceptedRolls = useMemo(() => computeManagerAcceptedRolls(data), [data]);
+  const managerAcceptedKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
 
   const handleAccept = (issuanceId, physicalCountInput) => {
     if (Number(physicalCountInput) < 0) return showToast("Count cannot be negative!", "warn");
 
-    mutate((prev) => ({
-      ...prev,
-      issuance: (prev.issuance || []).map((item) =>
+    mutate((prev) => {
+      const nextIssuance = (prev.issuance || []).map((item) =>
         item.id === issuanceId
           ? { ...item, status: "ACCEPTED", confirmedBy: session.name, physicalCount: Number(physicalCountInput) }
           : item
-      ),
-    }), "Accepted Roll Stock", `Confirmed ${physicalCountInput} rolls`);
+      );
 
-    showToast("Roll Stock Accepted in Roll Count!");
+      const notif = {
+        id: uid(),
+        ts: new Date().toLocaleTimeString(),
+        read: false,
+        title: "Manager Material Acceptance",
+        msg: `Manager ${session.name} accepted roll issuance ID #${issuanceId.slice(0,5)} with physical count: ${physicalCountInput}`,
+      };
+
+      return {
+        ...prev,
+        issuance: nextIssuance,
+        notifications: [notif, ...(prev.notifications || [])],
+      };
+    }, "Accepted Roll Stock", `Confirmed ${physicalCountInput} rolls`);
+
+    showToast("Stock Accepted & Confirmation sent to Admin!");
   };
 
   return (
     <div className="space-y-4">
       <div className="bg-white p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center">
         <div>
-          <p className="font-bold text-sm text-[#0B3B45]">Manager Available Floor Rolls Balance (Roll Count)</p>
-          <p className="text-xs text-gray-500">Accepted physical rolls available for water production.</p>
+          <p className="font-bold text-sm text-[#0B3B45]">Manager Available Floor Roll Balance</p>
+          <p className="text-xs text-gray-500">Only accepted rolls appear here and can be used in production.</p>
         </div>
-        <p className="text-2xl font-mono font-bold text-[#1C8C9E]">{fmt(managerAcceptedRolls, 0)} rolls</p>
+        <p className="text-2xl font-mono font-bold text-[#1C8C9E]">{fmt(managerAcceptedKg)} kg</p>
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Custody Transfers & Manager Roll Acceptance</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Custody Transfers & Acceptance Log</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
               <th className="p-2">Roll Type</th>
               <th className="p-2 text-right">Issued Roll Count</th>
+              <th className="p-2 text-right">Weight (kg)</th>
               <th className="p-2">Status</th>
-              <th className="p-2">Acceptance (Roll Count)</th>
+              <th className="p-2">Physical Count & Confirm</th>
             </tr>
           </thead>
           <tbody>
@@ -1333,8 +1427,9 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
               return (
                 <tr key={item.id} className="border-t">
                   <td className="p-2 font-mono">{item.date}</td>
-                  <td className="p-2 font-semibold">{rType?.name || "Film Roll"}</td>
+                  <td className="p-2 font-semibold">{rType?.name || "Roll"}</td>
                   <td className="p-2 text-right font-mono font-bold">{item.qty} rolls</td>
+                  <td className="p-2 text-right font-mono">{item.weightKg} kg</td>
                   <td className="p-2">
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.status === "ACCEPTED" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
                       {item.status}
@@ -1342,9 +1437,9 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
                   </td>
                   <td className="p-2">
                     {item.status === "PENDING" ? (
-                      <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} placeholder="Rolls Count" />
+                      <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} />
                     ) : (
-                      <span className="text-gray-500 font-mono font-bold">{item.physicalCount} rolls confirmed</span>
+                      <span className="text-gray-500 font-mono">Confirmed: {item.physicalCount} pcs by {item.confirmedBy}</span>
                     )}
                   </td>
                 </tr>
@@ -1357,12 +1452,18 @@ function ManagerRollAcceptanceTab({ data, mutate, session, showToast }) {
   );
 }
 
-function AcceptForm({ session, onAccept, placeholder = "Physical Count" }) {
+function AcceptForm({ session, onAccept }) {
+  const isManager = session?.role === "manager" || session?.role === "owner";
   const [cnt, setCnt] = useState("");
+
+  if (!isManager) {
+    return null;
+  }
+
   return (
     <div className="flex gap-1 items-center">
-      <input type="number" min="1" value={cnt} onChange={(e) => setCnt(e.target.value)} placeholder={placeholder} className="inp py-1 text-xs w-28" required />
-      <button type="button" onClick={() => { if (Number(cnt) > 0) onAccept(cnt); }} className="btn-success text-xs py-1 px-2">Accept</button>
+      <input type="number" min="1" value={cnt} onChange={(e) => setCnt(e.target.value)} placeholder="Physical Count" className="inp py-1 text-xs w-28" required />
+      <button type="button" onClick={() => cnt !== "" && onAccept(cnt)} className="btn-success text-xs py-1 px-2">Accept</button>
     </div>
   );
 }
@@ -1381,7 +1482,7 @@ function PackingModule({ data, mutate, session, showToast }) {
         <p className="text-sm text-[#5B6B68]">Manage carrier/packing bags intake, transfers, and manager physical counts.</p>
       </div>
 
-      <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
+      <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit overflow-x-auto">
         {isOwner && <button onClick={() => setTab("intake")} className={`px-3 py-1.5 rounded-lg text-sm ${tab === "intake" ? "bg-[#0B3B45] text-white font-bold" : "text-gray-600"}`}>Owner Bag Intake</button>}
         {isOwner && <button onClick={() => setTab("issue")} className={`px-3 py-1.5 rounded-lg text-sm ${tab === "issue" ? "bg-[#0B3B45] text-white font-bold" : "text-gray-600"}`}>Issue Bags to Manager</button>}
         <button onClick={() => setTab("accept")} className={`px-3 py-1.5 rounded-lg text-sm ${tab === "accept" ? "bg-[#0B3B45] text-white font-bold" : "text-gray-600"}`}>Manager Bag Acceptance</button>
@@ -1409,17 +1510,32 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
 
     if (selectedBagTypeId === "new") {
       if (!typeName.trim()) return showToast("Enter a Bag Type Name!", "warn");
-      bId = uid();
+      const existing = (data.bagTypes || []).find(
+        (t) => t.name.trim().toLowerCase() === typeName.trim().toLowerCase()
+      );
+      if (existing) {
+        bId = existing.id;
+        nameToSave = existing.name;
+      } else {
+        bId = uid();
+      }
     } else {
       const existing = (data.bagTypes || []).find((t) => t.id === selectedBagTypeId);
       if (existing) nameToSave = existing.name;
     }
 
-    mutate((prev) => ({
-      ...prev,
-      bagTypes: (prev.bagTypes || []).some((t) => t.id === bId) ? prev.bagTypes : [...(prev.bagTypes || []), { id: bId, name: nameToSave.trim() }],
-      bagIntake: [{ id: uid(), date: todayISO(), bagTypeId: bId, supplier, qty: Number(qty) }, ...(prev.bagIntake || [])],
-    }), "Bag Intake Recorded", `${qty} pcs ${nameToSave}`);
+    mutate((prev) => {
+      const bagTypeExists = (prev.bagTypes || []).some((t) => t.id === bId);
+      const nextBagTypes = bagTypeExists
+        ? prev.bagTypes
+        : [...(prev.bagTypes || []), { id: bId, name: nameToSave.trim(), capacity: 30 }];
+
+      return {
+        ...prev,
+        bagTypes: nextBagTypes,
+        bagIntake: [{ id: uid(), date: todayISO(), bagTypeId: bId, supplier, qty: Number(qty) }, ...(prev.bagIntake || [])],
+      };
+    }, "Bag Intake Recorded", `${qty} pcs ${nameToSave}`);
 
     setTypeName(""); setSupplier(""); setQty(""); setSelectedBagTypeId("new");
     showToast("Bag Intake Recorded!");
@@ -1443,23 +1559,23 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
         {selectedBagTypeId === "new" && (
           <div>
             <label className="text-xs font-semibold text-gray-500">New Bag Type / Name</label>
-            <input value={typeName} onChange={(e) => setTypeName(e.target.value)} placeholder="e.g. 30-Sachet Outer Bag" className="inp" required />
+            <input value={typeName} onChange={(e) => setTypeName(e.target.value)} placeholder="e.g. 30-Sachet Outer Bag" className="inp" required={selectedBagTypeId === "new"} />
           </div>
         )}
 
         <div>
-          <label className="text-xs font-semibold text-gray-500">Quantity (pcs)</label>
+          <label className="text-xs font-semibold text-gray-500">Quantity (Bags/Bundles)</label>
           <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="500" className="inp" required />
         </div>
         <div>
-          <label className="text-xs font-semibold text-gray-500">Supplier Name</label>
+          <label className="text-xs font-semibold text-gray-500">Supplier (Hidden from Manager)</label>
           <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="e.g. Ghana Pack Ltd" className="inp" />
         </div>
         <button type="submit" className="btn-primary w-full">Save Bag Intake</button>
       </form>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Packing Bags Intake Ledger</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Owner Stock Ledger (Includes Suppliers)</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
@@ -1474,8 +1590,8 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
               <tr key={r.id} className="border-t">
                 <td className="p-2 font-mono">{r.date}</td>
                 <td className="p-2 font-semibold">{(data.bagTypes || []).find((t) => t.id === r.bagTypeId)?.name || "Bags"}</td>
-                <td className="p-2 text-blue-800">{r.supplier || "N/A"}</td>
-                <td className="p-2 text-right font-mono font-bold">{r.qty} pcs</td>
+                <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
+                <td className="p-2 text-right font-mono">{r.qty}</td>
               </tr>
             ))}
           </tbody>
@@ -1488,6 +1604,12 @@ function OwnerBagIntakeTab({ data, mutate, showToast }) {
 function IssueBagsTab({ data, mutate, session, showToast }) {
   const [bagTypeId, setBagTypeId] = useState(data.bagTypes[0]?.id || "");
   const [qty, setQty] = useState("");
+
+  useEffect(() => {
+    if ((data.bagTypes || []).length > 0 && !bagTypeId) {
+      setBagTypeId(data.bagTypes[0].id);
+    }
+  }, [data.bagTypes, bagTypeId]);
 
   const handleIssue = (e) => {
     e.preventDefault();
@@ -1503,10 +1625,12 @@ function IssueBagsTab({ data, mutate, session, showToast }) {
           qty: Number(qty),
           status: "PENDING",
           issuedBy: session.name,
+          confirmedBy: null,
+          physicalCount: null,
         },
         ...(prev.bagIssuance || []),
       ],
-    }), "Issued Bags", `${qty} pcs issued to Manager`);
+    }), "Issued Bags to Manager", `${qty} pcs issued`);
 
     setQty("");
     showToast("Packing Bags Issued to Manager!");
@@ -1525,7 +1649,7 @@ function IssueBagsTab({ data, mutate, session, showToast }) {
           </select>
         </div>
         <div>
-          <label className="text-xs font-semibold text-gray-500">Quantity to Issue (pcs)</label>
+          <label className="text-xs font-semibold text-gray-500">Quantity to Issue</label>
           <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="200" className="inp" required />
         </div>
         <button type="submit" className="btn-primary w-full">Transfer Bags to Manager</button>
@@ -1540,14 +1664,27 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
   const handleAccept = (issuanceId, physicalCountInput) => {
     if (Number(physicalCountInput) < 0) return showToast("Count cannot be negative!", "warn");
 
-    mutate((prev) => ({
-      ...prev,
-      bagIssuance: (prev.bagIssuance || []).map((item) =>
+    mutate((prev) => {
+      const nextIssuance = (prev.bagIssuance || []).map((item) =>
         item.id === issuanceId
           ? { ...item, status: "ACCEPTED", confirmedBy: session.name, physicalCount: Number(physicalCountInput) }
           : item
-      ),
-    }), "Accepted Bag Stock", `Confirmed ${physicalCountInput} bags`);
+      );
+
+      const notif = {
+        id: uid(),
+        ts: new Date().toLocaleTimeString(),
+        read: false,
+        title: "Manager Bag Acceptance",
+        msg: `Manager ${session.name} accepted bag transfer ID #${issuanceId.slice(0,5)} with physical count: ${physicalCountInput}`,
+      };
+
+      return {
+        ...prev,
+        bagIssuance: nextIssuance,
+        notifications: [notif, ...(prev.notifications || [])],
+      };
+    }, "Accepted Bag Stock", `Confirmed ${physicalCountInput} bags`);
 
     showToast("Packing Bags Accepted!");
   };
@@ -1557,21 +1694,21 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
       <div className="p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center bg-white">
         <div>
           <p className="font-bold text-sm text-[#0B3B45]">Manager Accepted Packing Bags Balance</p>
-          <p className="text-xs text-gray-500">Available pcs for production outer packaging.</p>
+          <p className="text-xs text-gray-500">Required to run production.</p>
         </div>
         <p className="text-2xl font-mono font-bold text-[#E8A23D]">{fmt(managerAcceptedQty, 0)} pcs</p>
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Bag Transfers & Acceptance</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Bag Issuance Transfers</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
               <th className="p-2">Bag Type</th>
-              <th className="p-2 text-right">Issued Qty</th>
+              <th className="p-2 text-right">Qty</th>
               <th className="p-2">Status</th>
-              <th className="p-2">Physical Acceptance</th>
+              <th className="p-2">Physical Count & Confirm</th>
             </tr>
           </thead>
           <tbody>
@@ -1581,7 +1718,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
                 <tr key={item.id} className="border-t">
                   <td className="p-2 font-mono">{item.date}</td>
                   <td className="p-2 font-semibold">{bType?.name || "Bags"}</td>
-                  <td className="p-2 text-right font-mono font-bold">{item.qty} pcs</td>
+                  <td className="p-2 text-right font-mono">{item.qty}</td>
                   <td className="p-2">
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.status === "ACCEPTED" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
                       {item.status}
@@ -1591,7 +1728,7 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
                     {item.status === "PENDING" ? (
                       <AcceptForm session={session} onAccept={(count) => handleAccept(item.id, count)} />
                     ) : (
-                      <span className="text-gray-500 font-mono font-bold">{item.physicalCount} pcs confirmed</span>
+                      <span className="text-gray-500 font-mono">Confirmed: {item.physicalCount} pcs by {item.confirmedBy}</span>
                     )}
                   </td>
                 </tr>
@@ -1605,48 +1742,45 @@ function ManagerBagAcceptanceTab({ data, mutate, session, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  PRODUCTION MODULE WITH MACHINE OPERATOR LOGGING & LEAKAGES             */
+/*  PRODUCTION MODULE                                                     */
 /* ---------------------------------------------------------------------- */
 function ProductionModule({ data, mutate, session, showToast }) {
-  const managerRollsCount = useMemo(() => computeManagerAcceptedRolls(data), [data]);
+  const managerRollsKg = useMemo(() => computeManagerAcceptedRolls(data), [data]);
   const managerBagsQty = useMemo(() => computeManagerAcceptedBags(data), [data]);
 
   const [rollTypeId, setRollTypeId] = useState(data.rollTypes[0]?.id || "");
-  const [bagTypeId, setBagTypeId] = useState(data.bagTypes[0]?.id || "");
-  const [operatorName, setOperatorName] = useState("");
-  const [machineNo, setMachineNo] = useState("Water Cutting Machine #1");
-  const [rollsUsed, setRollsUsed] = useState("1");
   const [weightUsed, setWeightUsed] = useState("");
   const [actualBags, setActualBags] = useState("");
-  const [bagsUsedQty, setBagsUsedQty] = useState("");
   const [leakage, setLeakage] = useState("0");
+  const [bagsUsedQty, setBagsUsedQty] = useState("");
 
-  const canProduce = managerRollsCount > 0 && managerBagsQty > 0;
+  useEffect(() => {
+    if ((data.rollTypes || []).length > 0 && !rollTypeId) {
+      setRollTypeId(data.rollTypes[0].id);
+    }
+  }, [data.rollTypes, rollTypeId]);
+
+  const canProduce = managerRollsKg > 0 && managerBagsQty > 0;
 
   const handleRunProduction = (e) => {
     e.preventDefault();
     if (!canProduce) {
-      showToast("Cannot produce: Accepted Film Rolls or Packing Bags required!", "warn");
+      showToast("PRODUCTION BLOCKED: Rolls or Packing Bags not available/accepted by manager!", "warn");
       return;
     }
 
-    if (!operatorName.trim()) {
-      showToast("Please enter the Machine Operator's full name!", "warn");
+    if (Number(weightUsed) <= 0 || Number(actualBags) <= 0 || Number(bagsUsedQty) <= 0) {
+      showToast("Negative or zero values are strict violation!", "warn");
       return;
     }
 
-    if (Number(rollsUsed) <= 0 || Number(weightUsed) <= 0 || Number(actualBags) <= 0 || Number(bagsUsedQty) <= 0) {
-      showToast("Enter valid positive production figures!", "warn");
-      return;
-    }
-
-    if (Number(rollsUsed) > managerRollsCount) {
-      showToast(`Exceeds manager floor roll count balance (${managerRollsCount} rolls)!`, "warn");
+    if (Number(weightUsed) > managerRollsKg) {
+      showToast(`Cannot use more rolls than available (${managerRollsKg} kg)`, "warn");
       return;
     }
 
     if (Number(bagsUsedQty) > managerBagsQty) {
-      showToast(`Exceeds manager packing bag balance (${managerBagsQty} pcs)!`, "warn");
+      showToast(`Cannot use more packing bags than available (${managerBagsQty} pcs)`, "warn");
       return;
     }
 
@@ -1658,11 +1792,7 @@ function ProductionModule({ data, mutate, session, showToast }) {
         {
           id: uid(),
           date: todayISO(),
-          operatorName: operatorName.trim(),
-          machineNo,
           rollTypeId,
-          bagTypeId,
-          rollsUsed: Number(rollsUsed),
           weightUsedKg: Number(weightUsed),
           actualBags: Number(actualBags),
           leakageBags: Number(leakage || 0),
@@ -1681,9 +1811,9 @@ function ProductionModule({ data, mutate, session, showToast }) {
         },
         ...(prev.bagUsage || []),
       ],
-    }), "Recorded Production Run", `${netProduced} net bags produced by operator ${operatorName}`);
+    }), "Recorded Production Run", `${netProduced} sachet bags produced`);
 
-    setOperatorName(""); setRollsUsed("1"); setWeightUsed(""); setActualBags(""); setLeakage("0"); setBagsUsedQty("");
+    setWeightUsed(""); setActualBags(""); setLeakage("0"); setBagsUsedQty("");
     showToast("Production Run Logged Successfully!");
   };
 
@@ -1691,114 +1821,77 @@ function ProductionModule({ data, mutate, session, showToast }) {
     <div className="space-y-5">
       <div>
         <p className="font-display font-800 text-2xl text-[#0B3B45]">Production Floor Execution</p>
-        <p className="text-sm text-[#5B6B68]">Record water production runs, machine operator assignments, roll weight, packing bags, and leakages.</p>
+        <p className="text-sm text-[#5B6B68]">Convert accepted rolls & packing bags into finished sellable sachet water bags.</p>
       </div>
 
       {!canProduce ? (
         <div className="bg-[#FBEAE5] border border-[#EFC3B7] p-5 rounded-2xl flex items-center gap-3 text-[#C4472F]">
           <AlertTriangle size={24} className="shrink-0" />
           <div>
-            <p className="font-bold text-sm">PRODUCTION BLOCKED</p>
-            <p className="text-xs">Manager must accept at least 1 Film Roll and 1 Packing Bag transfer before running production.</p>
+            <p className="font-bold text-sm">PRODUCTION RUN BLOCKED</p>
+            <p className="text-xs">You cannot initiate a production run because there are 0 accepted Film Rolls or 0 accepted Packing Bags in Manager stock. Please accept pending transfers first.</p>
           </div>
         </div>
       ) : (
-        <form onSubmit={handleRunProduction} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4 max-w-2xl">
-          <p className="font-bold text-[#0B3B45]">Record New Production Run & Machine Operator</p>
-          
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Water Cutting Machine Operator *</label>
-              <input value={operatorName} onChange={(e) => setOperatorName(e.target.value)} placeholder="e.g. Emmanuel Mensah" className="inp mt-1" required />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Machine Assignment</label>
-              <select value={machineNo} onChange={(e) => setMachineNo(e.target.value)} className="inp mt-1">
-                <option value="Water Cutting Machine #1">Water Cutting Machine #1</option>
-                <option value="Water Cutting Machine #2">Water Cutting Machine #2</option>
-                <option value="Water Cutting Machine #3">Water Cutting Machine #3</option>
-              </select>
-            </div>
+        <form onSubmit={handleRunProduction} className="bg-[#FFFFFF] p-5 rounded-2xl border border-[#DDE3DA] space-y-4 max-w-xl">
+          <p className="font-bold text-[#0B3B45]">Record New Production Run</p>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Film Roll Type</label>
+            <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
+              {(data.rollTypes || []).map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-gray-500">Film Roll Type</label>
-              <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp">
-                {(data.rollTypes || []).map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Packing Bag Type Used</label>
-              <select value={bagTypeId} onChange={(e) => setBagTypeId(e.target.value)} className="inp">
-                {(data.bagTypes || []).map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Rolls Used (Count)</label>
-              <input type="number" min="1" value={rollsUsed} onChange={(e) => setRollsUsed(e.target.value)} placeholder="1" className="inp" required />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Weight Used (kg)</label>
-              <input type="number" min="0.1" step="0.1" value={weightUsed} onChange={(e) => setWeightUsed(e.target.value)} placeholder="25" className="inp" required />
+              <label className="text-xs font-semibold text-gray-500">Weight Roll Used (kg)</label>
+              <input type="number" min="0.1" step="0.1" value={weightUsed} onChange={(e) => setWeightUsed(e.target.value)} placeholder="e.g. 25" className="inp" required />
             </div>
             <div>
               <label className="text-xs font-semibold text-gray-500">Packing Bags Used (pcs)</label>
-              <input type="number" min="1" value={bagsUsedQty} onChange={(e) => setBagsUsedQty(e.target.value)} placeholder="30" className="inp" required />
+              <input type="number" min="1" value={bagsUsedQty} onChange={(e) => setBagsUsedQty(e.target.value)} placeholder="e.g. 30" className="inp" required />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-gray-500">Gross Bags Produced</label>
-              <input type="number" min="1" value={actualBags} onChange={(e) => setActualBags(e.target.value)} placeholder="100" className="inp" required />
+              <label className="text-xs font-semibold text-gray-500">Gross Sachet Bags Produce</label>
+              <input type="number" min="1" value={actualBags} onChange={(e) => setActualBags(e.target.value)} placeholder="e.g. 900" className="inp" required />
             </div>
             <div>
-              <label className="text-xs font-semibold text-gray-500">Leakage / Defective Bags</label>
-              <input type="number" min="0" value={leakage} onChange={(e) => setLeakage(e.target.value)} placeholder="0" className="inp" required />
+              <label className="text-xs font-semibold text-gray-500">Burst / Leakages (Bags)</label>
+              <input type="number" min="0" value={leakage} onChange={(e) => setLeakage(e.target.value)} className="inp" required />
             </div>
           </div>
 
-          <button type="submit" className="btn-primary w-full py-2.5">
-            <Plus size={16} /> Log Production Run
-          </button>
+          <button type="submit" className="btn-primary w-full py-2.5">Record Finished Sachet Goods</button>
         </form>
       )}
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Production Log & Machine Operator History</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Production History</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
-              <th className="p-2">Machine & Operator</th>
-              <th className="p-2 text-right">Rolls Used</th>
-              <th className="p-2 text-right">Weight (kg)</th>
-              <th className="p-2 text-right">Gross Produced</th>
-              <th className="p-2 text-right">Leakages</th>
-              <th className="p-2 text-right">Net Available Bags</th>
+              <th className="p-2">Operator</th>
+              <th className="p-2 text-right">Roll Used (kg)</th>
+              <th className="p-2 text-right">Gross Produce</th>
+              <th className="p-2 text-right">Leakage</th>
+              <th className="p-2 text-right">Net Sellable Bags</th>
             </tr>
           </thead>
           <tbody>
-            {(data.productionRuns || []).map((run) => (
-              <tr key={run.id} className="border-t">
-                <td className="p-2 font-mono">{run.date}</td>
-                <td className="p-2 font-bold text-[#0B3B45]">
-                  {run.machineNo || "Water Cutting Machine #1"}<br />
-                  <span className="text-[11px] text-gray-500 font-normal">Operator: {run.operatorName}</span>
-                </td>
-                <td className="p-2 text-right font-mono font-bold">{run.rollsUsed} rolls</td>
-                <td className="p-2 text-right font-mono">{run.weightUsedKg} kg</td>
-                <td className="p-2 text-right font-mono">{run.actualBags} bags</td>
-                <td className="p-2 text-right font-mono text-red-600 font-bold">{run.leakageBags || 0} bags</td>
-                <td className="p-2 text-right font-mono font-bold text-green-700">{run.netAvailableBags} bags</td>
+            {(data.productionRuns || []).map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2 font-mono">{r.date}</td>
+                <td className="p-2">{r.recordedBy}</td>
+                <td className="p-2 text-right font-mono">{r.weightUsedKg}</td>
+                <td className="p-2 text-right font-mono">{r.actualBags}</td>
+                <td className="p-2 text-right font-mono text-red-600">{r.leakageBags}</td>
+                <td className="p-2 text-right font-mono font-bold text-green-700">{r.netAvailableBags}</td>
               </tr>
             ))}
           </tbody>
@@ -1809,41 +1902,120 @@ function ProductionModule({ data, mutate, session, showToast }) {
 }
 
 /* ---------------------------------------------------------------------- */
-/*  SALES & FREE GIVEAWAY WATER BAGS MODULE WITH THERMAL RECEIPT PRINT    */
+/*  PRINTABLE RECEIPT MODAL                                                */
+/* ---------------------------------------------------------------------- */
+function ReceiptModal({ sale, companyName, driversList, onClose }) {
+  if (!sale) return null;
+  const driver = driversList.find((d) => d.id === sale.driverId);
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl relative">
+        <button onClick={onClose} className="absolute top-3 right-3 text-gray-400 hover:text-black">
+          <X size={18} />
+        </button>
+
+        <div id="printable-receipt" className="text-center font-mono text-xs space-y-3">
+          <div className="border-b border-dashed border-gray-300 pb-3">
+            <div className="flex justify-center items-center gap-1 text-[#0B3B45] font-bold text-base">
+              <Droplets size={18} />
+              <span>{companyName || "PureLedger Water"}</span>
+            </div>
+            <p className="text-[10px] text-gray-500 uppercase mt-0.5">Sachet Water Purchase Receipt</p>
+            <p className="text-[9px] text-gray-400">Ref ID: #{sale.id.toUpperCase()}</p>
+          </div>
+
+          <div className="text-left text-[11px] space-y-1 py-1">
+            <div className="flex justify-between"><span className="text-gray-500">Date/Time:</span><span>{new Date(sale.timestamp || Date.now()).toLocaleString()}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Customer:</span><span className="font-bold">{sale.customer}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Driver / Truck:</span><span>{driver ? driver.name : "Direct Factory Sale"}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Payment Channel:</span><span className="uppercase font-semibold text-blue-800">{sale.method}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Cashier / Manager:</span><span>{sale.recordedBy}</span></div>
+          </div>
+
+          <div className="border-t border-b border-dashed border-gray-300 py-2 space-y-1.5">
+            <div className="flex justify-between text-left font-bold border-b pb-1">
+              <span>Item Description</span>
+              <span>Total</span>
+            </div>
+            <div className="flex justify-between text-left">
+              <span>Sachet Water ({sale.bagsSold} bags @ {fmtGHS(sale.pricePerBag)})</span>
+              <span className="font-bold">{fmtGHS(sale.totalAmount)}</span>
+            </div>
+          </div>
+
+          <div className="pt-1 flex justify-between items-center text-sm font-bold">
+            <span>TOTAL PAID:</span>
+            <span className="text-base text-green-700">{fmtGHS(sale.amountPaid)}</span>
+          </div>
+
+          <div className="border-t border-dashed border-gray-300 pt-3 text-[10px] text-gray-500">
+            <p>Thank you for your business!</p>
+            <p className="text-[9px] text-gray-400 mt-0.5">PureLedger ERP · Verified Offline Transaction</p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <button onClick={handlePrint} className="btn-primary flex-1 py-2">
+            <Printer size={15} /> Print Receipt
+          </button>
+          <button onClick={onClose} className="px-3 py-2 border rounded-lg text-xs font-bold text-gray-600 hover:bg-gray-100">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/*  SALES & BANK DEPOSIT MODULE                                           */
 /* ---------------------------------------------------------------------- */
 function SalesModule({ data, mutate, session, showToast }) {
+  const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
   const finished = useMemo(() => computeFinishedGoods(data), [data]);
-  const defaultPrice = data.settings?.pricePerBag || 5.0;
+  const cashAvailable = useMemo(() => computeCashBalance(data), [data]);
 
-  const [customerName, setCustomerName] = useState("");
+  const [driverId, setDriverId] = useState(driversList[0]?.id || "factory");
+  const [customer, setCustomer] = useState("");
   const [bagsSold, setBagsSold] = useState("");
-  const [freeBags, setFreeBags] = useState("0");
-  const [pricePerBag, setPricePerBag] = useState(defaultPrice);
   const [paymentMethod, setPaymentMethod] = useState("cash");
-  const [lastReceipt, setLastReceipt] = useState(null);
 
-  const handleRecordSale = (e) => {
+  const [depositAmount, setDepositAmount] = useState("");
+  const [bankName, setBankName] = useState("");
+
+  const [activeReceiptSale, setActiveReceiptSale] = useState(null);
+
+  const handleSale = (e) => {
     e.preventDefault();
-    const qtySold = Number(bagsSold || 0);
-    const qtyFree = Number(freeBags || 0);
-    const totalOut = qtySold + qtyFree;
 
-    if (totalOut <= 0) return showToast("Enter a valid number of bags!", "warn");
-
-    if (totalOut > finished.availableForSale) {
-      return showToast(`Insufficient inventory! Only ${finished.availableForSale} bags available.`, "warn");
+    if (finished.availableForSale <= 0) {
+      showToast("SALES DISALLOWED: Zero sachet bags produce available!", "warn");
+      return;
     }
 
-    const totalAmount = qtySold * Number(pricePerBag);
+    if (Number(bagsSold) <= 0) return showToast("Quantity sold must be greater than zero!", "warn");
+
+    if (Number(bagsSold) > finished.availableForSale) {
+      showToast(`Cannot sell more than available finished stock (${finished.availableForSale} bags)`, "warn");
+      return;
+    }
+
+    const pricePerBag = data.settings.pricePerBag || 5.0;
+    const totalAmount = Number(bagsSold) * pricePerBag;
 
     const newSale = {
       id: uid(),
-      receiptNo: `RCT-${Math.floor(100000 + Math.random() * 900000)}`,
       date: todayISO(),
-      customerName: customerName.trim() || "Walk-in Customer",
-      bagsSold: qtySold,
-      freeBags: qtyFree,
-      pricePerBag: Number(pricePerBag),
+      timestamp: new Date().toISOString(),
+      driverId: driverId === "factory" ? null : driverId,
+      customer: customer || "Direct Customer",
+      bagsSold: Number(bagsSold),
+      pricePerBag,
       totalAmount,
       amountPaid: totalAmount,
       method: paymentMethod,
@@ -1853,257 +2025,635 @@ function SalesModule({ data, mutate, session, showToast }) {
     mutate((prev) => ({
       ...prev,
       sales: [newSale, ...(prev.sales || [])],
-    }), "Recorded Water Sale", `${qtySold} bags sold + ${qtyFree} free bags to ${newSale.customerName}`);
+    }), "Recorded Sale", `${bagsSold} bags sold to ${customer || "Direct Customer"}`);
 
-    setLastReceipt(newSale);
-    setCustomerName(""); setBagsSold(""); setFreeBags("0");
-    showToast("Sales Transaction Completed!");
+    setBagsSold(""); setCustomer("");
+    showToast("Sale Recorded Successfully!");
+    setActiveReceiptSale(newSale);
   };
 
-  const handlePrintReceipt = () => {
-    window.print();
+  const handleBankDeposit = (e) => {
+    e.preventDefault();
+    const depVal = Number(depositAmount);
+
+    if (depVal <= 0) return showToast("Invalid deposit amount!", "warn");
+
+    if (depVal > cashAvailable) {
+      showToast(`DEPOSIT REJECTED: Deposit (${fmtGHS(depVal)}) exceeds cash on hand available (${fmtGHS(cashAvailable)})!`, "warn");
+      return;
+    }
+
+    mutate((prev) => ({
+      ...prev,
+      bankDeposits: [
+        {
+          id: uid(),
+          date: todayISO(),
+          amount: depVal,
+          bankName,
+          recordedBy: session.name,
+        },
+        ...(prev.bankDeposits || []),
+      ],
+    }), "Bank Deposit Made", `${fmtGHS(depVal)} deposited to ${bankName}`);
+
+    setDepositAmount(""); setBankName("");
+    showToast("Bank Deposit Reconciled!");
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <p className="font-display font-800 text-2xl text-[#0B3B45]">Water Sales & Dispatch</p>
-        <p className="text-sm text-[#5B6B68]">Record sachet water sales, free giveaway bags, and issue customer thermal receipts.</p>
+        <p className="font-display font-800 text-2xl text-[#0B3B45]">Sales, Drivers & Cash</p>
+        <p className="text-sm text-[#5B6B68]">Record sales against trucks or direct factory sales, print receipts, and reconcile cash.</p>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        <form onSubmit={handleRecordSale} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-          <p className="font-bold text-[#0B3B45] text-base">New Water Dispatch / Sale Entry</p>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Customer / Driver Name</label>
-            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Walk-in Customer / Driver Kwame" className="inp mt-1" />
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="font-bold text-[#0B3B45]">Record Sachet Water Sale</p>
+            <span className="text-xs font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded">
+              Stock: {fmt(finished.availableForSale, 0)} bags
+            </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Paid Bags Sold *</label>
-              <input type="number" min="0" value={bagsSold} onChange={(e) => setBagsSold(e.target.value)} placeholder="e.g. 50" className="inp mt-1" required />
+          {finished.availableForSale <= 0 ? (
+            <div className="bg-[#FBEAE5] text-[#C4472F] p-3 rounded-lg text-xs font-semibold">
+              Sales locked! Zero sachet bags produce available in inventory.
             </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Free / Giveaway Bags</label>
-              <input type="number" min="0" value={freeBags} onChange={(e) => setFreeBags(e.target.value)} placeholder="0" className="inp mt-1" required />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Price per Bag (GH₵)</label>
-              <input type="number" min="0.1" step="0.1" value={pricePerBag} onChange={(e) => setPricePerBag(e.target.value)} className="inp mt-1" required />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-gray-500">Payment Method</label>
-              <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="inp mt-1">
-                <option value="cash">Cash Payment</option>
-                <option value="momo">Mobile Money (MoMo)</option>
-                <option value="bank">Bank Transfer</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="p-3 bg-[#F7F8F5] rounded-xl flex justify-between items-center text-xs font-bold text-[#0B3B45]">
-            <span>Total Payable Amount:</span>
-            <span className="text-base font-mono">{fmtGHS(Number(bagsSold || 0) * Number(pricePerBag))}</span>
-          </div>
-
-          <button type="submit" className="btn-primary w-full py-2.5">
-            <Receipt size={16} /> Complete Sale & Generate Receipt
-          </button>
-        </form>
-
-        {lastReceipt && (
-          <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
-            <div className="flex justify-between items-center no-print border-b pb-2">
-              <p className="font-bold text-[#0B3B45]">Thermal Receipt Preview</p>
-              <button onClick={handlePrintReceipt} className="btn-primary py-1 px-3 text-xs bg-[#2A6E4A]">
-                <Printer size={14} /> Print Receipt
-              </button>
-            </div>
-
-            <div id="printable-receipt" className="p-4 bg-gray-50 font-mono text-xs border rounded-xl space-y-2 text-black">
-              <div className="text-center font-bold">
-                <p className="text-sm">MATTBEES WATER SERVICES</p>
-                <p className="text-[10px]">Accra, Ghana · Tel: +233 24 000 0000</p>
-                <p className="text-[10px]">Official Sachet Water Receipt</p>
+          ) : (
+            <form onSubmit={handleSale} className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-500">Sales Channel / Driver</label>
+                <select value={driverId} onChange={(e) => setDriverId(e.target.value)} className="inp" required>
+                  <option value="factory">Direct Factory Sale (Manager Gate Sale)</option>
+                  {driversList.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
               </div>
-              <div className="border-b border-dashed my-2"></div>
-              <div className="flex justify-between"><span>Receipt #:</span><span>{lastReceipt.receiptNo}</span></div>
-              <div className="flex justify-between"><span>Date:</span><span>{lastReceipt.date}</span></div>
-              <div className="flex justify-between"><span>Customer:</span><span>{lastReceipt.customerName}</span></div>
-              <div className="border-b border-dashed my-2"></div>
-              <div className="flex justify-between"><span>Paid Bags (@ {fmtGHS(lastReceipt.pricePerBag)}):</span><span>{lastReceipt.bagsSold} bags</span></div>
-              {lastReceipt.freeBags > 0 && <div className="flex justify-between text-gray-700"><span>Free / Giveaway Bags:</span><span>{lastReceipt.freeBags} bags</span></div>}
-              <div className="border-b border-dashed my-2"></div>
-              <div className="flex justify-between font-bold text-sm"><span>TOTAL PAID:</span><span>{fmtGHS(lastReceipt.totalAmount)}</span></div>
-              <div className="flex justify-between text-[10px]"><span>Payment Method:</span><span className="uppercase">{lastReceipt.method}</span></div>
-              <div className="text-center pt-3 text-[9px]">Thank you for choosing Mattbees Water Services!</div>
-            </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-500">Customer Name / Retailer</label>
+                <input value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="e.g. Abena Trading" className="inp" required />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Bags Quantity</label>
+                  <input type="number" min="1" max={finished.availableForSale} value={bagsSold} onChange={(e) => setBagsSold(e.target.value)} className="inp" required />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-500">Fixed Unit Price</label>
+                  <input value={fmtGHS(data.settings.pricePerBag)} disabled className="inp" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-gray-500">Payment Channel</label>
+                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="inp">
+                  <option value="cash">Cash Received</option>
+                  <option value="momo">MTN Mobile Money / Telecel</option>
+                  <option value="bank">Bank Transfer</option>
+                </select>
+              </div>
+
+              <button type="submit" className="btn-primary w-full py-2.5">
+                <Receipt size={16} /> Complete Sale & Print Receipt
+              </button>
+            </form>
+          )}
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="font-bold text-[#0B3B45]">Matched Bank Deposit</p>
+            <span className="text-xs font-bold text-blue-800 bg-blue-100 px-2 py-0.5 rounded">
+              Cash Available: {fmtGHS(cashAvailable)}
+            </span>
           </div>
-        )}
+
+          <form onSubmit={handleBankDeposit} className="space-y-3">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Deposit Amount (GH₵)</label>
+              <input type="number" min="0.01" step="0.01" max={cashAvailable} value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} placeholder="e.g. 500" className="inp" required />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Destination Bank Name / Ref</label>
+              <input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. GCB Bank - Accra Branch" className="inp" required />
+            </div>
+
+            <button type="submit" className="btn-success w-full py-2.5">Deposit & Match Cash Balance</button>
+          </form>
+        </div>
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Sales & Free Bags Distribution History</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Recent Sales Transactions & Purchase Receipts</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Receipt #</th>
-              <th className="p-2">Date</th>
-              <th className="p-2">Customer / Driver</th>
+              <th className="p-2">Date/Time</th>
+              <th className="p-2">Customer</th>
+              <th className="p-2">Channel / Driver</th>
               <th className="p-2 text-right">Bags Sold</th>
-              <th className="p-2 text-right">Free Bags</th>
-              <th className="p-2 text-right">Amount Paid</th>
+              <th className="p-2 text-right">Total Amount</th>
+              <th className="p-2">Method</th>
+              <th className="p-2 text-center">Receipt</th>
             </tr>
           </thead>
           <tbody>
-            {(data.sales || []).map((sale) => (
-              <tr key={sale.id} className="border-t">
-                <td className="p-2 font-mono font-bold text-blue-900">{sale.receiptNo || "RCT-000"}</td>
-                <td className="p-2 font-mono">{sale.date}</td>
-                <td className="p-2 font-semibold">{sale.customerName}</td>
-                <td className="p-2 text-right font-mono font-bold">{sale.bagsSold} bags</td>
-                <td className="p-2 text-right font-mono text-amber-700 font-bold">{sale.freeBags || 0} bags</td>
-                <td className="p-2 text-right font-mono font-bold text-green-700">{fmtGHS(sale.totalAmount)}</td>
-              </tr>
-            ))}
+            {(data.sales || []).map((s) => {
+              const drv = driversList.find((d) => d.id === s.driverId);
+              return (
+                <tr key={s.id} className="border-t">
+                  <td className="p-2 font-mono">{s.date}</td>
+                  <td className="p-2 font-semibold">{s.customer}</td>
+                  <td className="p-2 text-blue-900 font-semibold">{drv ? drv.name : "Direct Factory Sale"}</td>
+                  <td className="p-2 text-right font-mono">{s.bagsSold}</td>
+                  <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
+                  <td className="p-2 uppercase font-mono text-[10px]">{s.method}</td>
+                  <td className="p-2 text-center">
+                    <button
+                      onClick={() => setActiveReceiptSale(s)}
+                      className="px-2 py-1 bg-[#EAF3F1] hover:bg-[#1C8C9E] hover:text-white rounded text-[#0B3B45] font-bold text-[10px] flex items-center justify-center gap-1 mx-auto"
+                    >
+                      <Receipt size={12} /> Print Receipt
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      {activeReceiptSale && (
+        <ReceiptModal
+          sale={activeReceiptSale}
+          companyName={data.settings.companyName}
+          driversList={driversList}
+          onClose={() => setActiveReceiptSale(null)}
+        />
+      )}
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  REPORTS & PRINTABLE SUMMARY REPORT MODULE                             */
+/*  REPORTS & DRIVER DASHBOARD MODULE                                     */
 /* ---------------------------------------------------------------------- */
 function ReportsModule({ data, session }) {
-  const finished = computeFinishedGoods(data);
-  const totalRev = (data.sales || []).reduce((s, r) => s + (r.totalAmount || 0), 0);
-  const totalExp = [...(data.expenses || []), ...(data.adminExpenses || [])].reduce((s, e) => s + (e.amount || 0), 0);
+  const isDriver = session.role === "driver";
+  const [activeTab, setActiveTab] = useState("drivers");
+  const driversList = useMemo(() => (data.users || []).filter((u) => u.role === "driver"), [data.users]);
+  const [filterDriver, setFilterDriver] = useState(isDriver ? session.id : "all");
 
-  const handlePrintPDF = () => {
+  const salesFiltered = useMemo(() => {
+    if (filterDriver === "all") return data.sales || [];
+    return (data.sales || []).filter((s) => s.driverId === filterDriver);
+  }, [data.sales, filterDriver]);
+
+  const metrics = useMemo(() => {
+    const now = new Date();
+    const todayStr = todayISO();
+
+    let daily = 0, weekly = 0, monthly = 0, annual = 0;
+
+    salesFiltered.forEach((s) => {
+      const d = new Date(s.date);
+      const diffDays = (now - d) / (1000 * 3600 * 24);
+
+      if (s.date === todayStr) daily += s.totalAmount;
+      if (diffDays <= 7) weekly += s.totalAmount;
+      if (d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) monthly += s.totalAmount;
+      if (d.getFullYear() === now.getFullYear()) annual += s.totalAmount;
+    });
+
+    return { daily, weekly, monthly, annual };
+  }, [salesFiltered]);
+
+  const driverStats = useMemo(() => {
+    const visibleDrivers = isDriver ? driversList.filter((d) => d.id === session.id) : driversList;
+
+    return visibleDrivers.map((driver) => {
+      const driverSales = (data.sales || []).filter((s) => s.driverId === driver.id);
+      const totalBags = driverSales.reduce((acc, s) => acc + s.bagsSold, 0);
+      const totalRevenue = driverSales.reduce((acc, s) => acc + s.totalAmount, 0);
+      const todayBags = driverSales
+        .filter((s) => s.date === todayISO())
+        .reduce((acc, s) => acc + s.bagsSold, 0);
+
+      return {
+        ...driver,
+        totalSalesCount: driverSales.length,
+        totalBags,
+        totalRevenue,
+        todayBags,
+      };
+    });
+  }, [driversList, data.sales, isDriver, session.id]);
+
+  const handleGeneratePdf = () => {
     window.print();
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center no-print">
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <p className="font-display font-800 text-2xl text-[#0B3B45]">Operational Reports & PDF Exports</p>
-          <p className="text-sm text-[#5B6B68]">Comprehensive executive report summary for production and revenue.</p>
+          <p className="font-display font-800 text-2xl text-[#0B3B45]">{isDriver ? "Driver Delivery Portal" : "Reports & Delivery Drivers"}</p>
+          <p className="text-sm text-[#5B6B68]">Delivery performance, truck logs, and periodic revenue analytics.</p>
         </div>
-        <button onClick={handlePrintPDF} className="btn-primary bg-[#1C8C9E]">
-          <Printer size={16} /> Print Report / Save PDF
-        </button>
+
+        <div className="flex gap-2 no-print">
+          <button onClick={handleGeneratePdf} className="btn-primary py-1.5 px-3 text-xs bg-[#1C8C9E]">
+            <Printer size={14} /> Generate PDF Report
+          </button>
+          {!isDriver && (
+            <div className="flex gap-1 bg-white rounded-xl border border-[#DDE3DA] p-1 w-fit">
+              <button
+                onClick={() => setActiveTab("drivers")}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "drivers" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
+              >
+                Driver Dashboard
+              </button>
+              <button
+                onClick={() => setActiveTab("ledger")}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === "ledger" ? "bg-[#0B3B45] text-white" : "text-gray-600"}`}
+              >
+                Periodic Sales Ledger
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div id="printable-area" className="bg-white p-6 rounded-2xl border border-[#DDE3DA] space-y-6">
-        <div className="border-b pb-4 flex justify-between items-center">
-          <div>
-            <h2 className="text-xl font-bold text-[#0B3B45]">Mattbees Water Services</h2>
-            <p className="text-xs text-gray-500">Production, Inventory & Sales Executive Statement</p>
-          </div>
-          <div className="text-right text-xs font-mono">
-            <p>Generated: {new Date().toLocaleDateString()}</p>
-            <p>User: {session.name}</p>
-          </div>
-        </div>
+      <div id="printable-area" className="space-y-5">
+        {activeTab === "drivers" && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {driverStats.map((driver) => (
+                <div key={driver.id} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-[#EDEFEA] pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-[#0B3B45] flex items-center justify-center text-white">
+                        <Truck size={18} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-[#0B3B45] text-sm">{driver.name}</p>
+                        <p className="text-[11px] font-mono text-[#5B6B68]">Reg: {driver.truckNo || "N/A"}</p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 text-green-800">
+                      Active Truck
+                    </span>
+                  </div>
 
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div className="p-3 bg-gray-50 rounded-xl border">
-            <p className="text-xs text-gray-500 font-bold">TOTAL WATER PRODUCED</p>
-            <p className="text-lg font-mono font-bold text-blue-900">{fmt(finished.totalProduced, 0)} bags</p>
-          </div>
-          <div className="p-3 bg-gray-50 rounded-xl border">
-            <p className="text-xs text-gray-500 font-bold">TOTAL REVENUE GENERATED</p>
-            <p className="text-lg font-mono font-bold text-green-800">{fmtGHS(totalRev)}</p>
-          </div>
-          <div className="p-3 bg-gray-50 rounded-xl border">
-            <p className="text-xs text-gray-500 font-bold">TOTAL OPERATIONAL EXPENSES</p>
-            <p className="text-lg font-mono font-bold text-red-700">{fmtGHS(totalExp)}</p>
-          </div>
-        </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
+                      <p className="text-gray-500 font-semibold text-[10px]">Today Dispatched</p>
+                      <p className="font-mono font-bold text-sm text-[#0B3B45]">{fmt(driver.todayBags, 0)} bags</p>
+                    </div>
+                    <div className="bg-[#F7F8F5] p-2.5 rounded-lg">
+                      <p className="text-gray-500 font-semibold text-[10px]">Total Sold Volume</p>
+                      <p className="font-mono font-bold text-sm text-[#1C8C9E]">{fmt(driver.totalBags, 0)} bags</p>
+                    </div>
+                  </div>
 
-        <div>
-          <p className="font-bold text-[#0B3B45] text-sm mb-2">Production Floor Summary</p>
-          <table className="w-full text-xs border">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="p-2 text-left">Date</th>
-                <th className="p-2 text-left">Operator</th>
-                <th className="p-2 text-right">Rolls Used</th>
-                <th className="p-2 text-right">Roll Weight (kg)</th>
-                <th className="p-2 text-right">Leakage Bags</th>
-                <th className="p-2 text-right">Net Bags Produced</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data.productionRuns || []).map((run) => (
-                <tr key={run.id} className="border-t">
-                  <td className="p-2 font-mono">{run.date}</td>
-                  <td className="p-2">{run.operatorName}</td>
-                  <td className="p-2 text-right font-mono">{run.rollsUsed} rolls</td>
-                  <td className="p-2 text-right font-mono">{run.weightUsedKg} kg</td>
-                  <td className="p-2 text-right font-mono text-red-600">{run.leakageBags || 0}</td>
-                  <td className="p-2 text-right font-mono font-bold">{run.netAvailableBags}</td>
-                </tr>
+                  <div className="bg-[#EAF3F1] p-3 rounded-xl border border-[#BFDCD6] flex justify-between items-center">
+                    <span className="text-xs font-semibold text-[#0B3B45]">Lifetime Revenue</span>
+                    <span className="font-mono font-extrabold text-sm text-[#2A6E4A]">{fmtGHS(driver.totalRevenue)}</span>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </div>
+          </div>
+        )}
+
+        {(activeTab === "ledger" && !isDriver) && (
+          <div className="space-y-5">
+            <div className="flex justify-between items-center no-print">
+              <span className="text-xs font-bold text-[#0B3B45]">Filter Driver:</span>
+              <select value={filterDriver} onChange={(e) => setFilterDriver(e.target.value)} className="inp w-60">
+                <option value="all">All Delivery Truck Drivers</option>
+                {driversList.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatCard icon={Truck} label="Daily Sales" value={fmtGHS(metrics.daily)} accent="#1C8C9E" />
+              <StatCard icon={Calendar} label="Weekly Sales (7-Day)" value={fmtGHS(metrics.weekly)} accent="#2A6E4A" />
+              <StatCard icon={TrendingUp} label="Monthly Sales" value={fmtGHS(metrics.monthly)} accent="#E8A23D" />
+              <StatCard icon={Wallet} label="Annual Sales" value={fmtGHS(metrics.annual)} accent="#0B3B45" />
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+              <p className="font-bold text-[#0B3B45] mb-3">Sales Ledger by Truck Driver</p>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-[#F7F8F5] text-left">
+                    <th className="p-2">Date</th>
+                    <th className="p-2">Driver / Truck</th>
+                    <th className="p-2">Customer</th>
+                    <th className="p-2 text-right">Bags Sold</th>
+                    <th className="p-2 text-right">Total Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {salesFiltered.map((s) => {
+                    const drv = driversList.find((d) => d.id === s.driverId);
+                    return (
+                      <tr key={s.id} className="border-t">
+                        <td className="p-2 font-mono">{s.date}</td>
+                        <td className="p-2 font-semibold text-blue-900">{drv?.name || "Direct Factory Sale"}</td>
+                        <td className="p-2">{s.customer}</td>
+                        <td className="p-2 text-right font-mono">{s.bagsSold}</td>
+                        <td className="p-2 text-right font-mono font-bold text-green-800">{fmtGHS(s.totalAmount)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 /* ---------------------------------------------------------------------- */
-/*  AUDIT LOG COMPONENT                                                   */
+/*  ADMIN MANAGEMENT MODULE & BUSINESS DETAILS REGISTRATION               */
 /* ---------------------------------------------------------------------- */
-function AuditLog({ data, mutate, showToast }) {
-  const logs = data.auditLog || [];
+function AdminManagementModule({ data, mutate, showToast }) {
+  const [selectedUserId, setSelectedUserId] = useState(data.users[0]?.id || "");
+  const [newPassword, setNewPassword] = useState("");
+  const [unitPrice, setUnitPrice] = useState(data.settings.pricePerBag || 5.0);
+
+  const [bizName, setBizName] = useState(data.businessDetails?.name || "");
+  const [bizPhone, setBizPhone] = useState(data.businessDetails?.phone || "");
+  const [bizAddress, setBizAddress] = useState(data.businessDetails?.address || "");
+  const [bizTin, setBizTin] = useState(data.businessDetails?.tin || "");
+
+  const [userName, setUserName] = useState("");
+  const [userRole, setUserRole] = useState("driver");
+  const [userPassword, setUserPassword] = useState("123");
+  const [truckNo, setTruckNo] = useState("");
+  const [userEmail, setUserEmail] = useState("");
+
+  const usersList = useMemo(() => data.users || [], [data.users]);
+
+  const handleUpdatePrice = (e) => {
+    e.preventDefault();
+    if (Number(unitPrice) <= 0) return showToast("Price per bag must be positive!", "warn");
+
+    mutate((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        pricePerBag: Number(unitPrice),
+      },
+    }), "Updated Price Per Bag", `GH₵ ${unitPrice} per bag`);
+
+    showToast("Unit Price Updated!");
+  };
+
+  const handleUpdateBusiness = (e) => {
+    e.preventDefault();
+    mutate((prev) => ({
+      ...prev,
+      businessDetails: {
+        name: bizName,
+        phone: bizPhone,
+        address: bizAddress,
+        tin: bizTin,
+        isRegistered: true,
+      },
+      settings: {
+        ...prev.settings,
+        companyName: bizName || prev.settings.companyName,
+      },
+    }), "Updated Business Setup", bizName);
+
+    showToast("Business Information Saved!");
+  };
+
+  const handleAddUser = (e) => {
+    e.preventDefault();
+    if (!userName.trim()) return showToast("User name is required!", "warn");
+
+    const newUser = {
+      id: uid(),
+      name: userName.trim(),
+      role: userRole,
+      password: userPassword,
+      ...(userRole === "driver" ? { truckNo: truckNo.trim() || "N/A" } : {}),
+      ...(userRole === "owner" ? { email: userEmail.trim() } : {}),
+    };
+
+    mutate((prev) => ({
+      ...prev,
+      users: [...(prev.users || []), newUser],
+    }), "Created User Account", `${userName} (${userRole})`);
+
+    setUserName("");
+    setTruckNo("");
+    setUserEmail("");
+    setUserPassword("123");
+    showToast("New User Account Created!");
+  };
+
+  const handleResetUserPassword = (e) => {
+    e.preventDefault();
+    if (!selectedUserId) return;
+    if (!newPassword || newPassword.length < 3) return showToast("Password too short!", "warn");
+
+    const usr = usersList.find((u) => u.id === selectedUserId);
+
+    mutate((prev) => ({
+      ...prev,
+      users: (prev.users || []).map((u) => u.id === selectedUserId ? { ...u, password: newPassword } : u),
+    }), "Changed User Password", usr ? usr.name : selectedUserId);
+
+    setNewPassword("");
+    showToast("User Password Updated!");
+  };
+
+  const handleDeleteUser = (userId, name) => {
+    if (usersList.length <= 1) return showToast("Cannot delete the only remaining user!", "warn");
+    if (window.confirm(`Are you sure you want to delete user: ${name}?`)) {
+      mutate((prev) => ({
+        ...prev,
+        users: (prev.users || []).filter((u) => u.id !== userId),
+      }), "Deleted User Account", name);
+      showToast("User Deleted!");
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <p className="font-display font-800 text-2xl text-[#0B3B45]">System Audit Trail</p>
-          <p className="text-sm text-[#5B6B68]">Immutable event log tracking system actions and user updates.</p>
-        </div>
-        <button onClick={() => window.print()} className="btn-primary bg-[#1C8C9E] text-xs py-1.5 no-print">
-          <Printer size={14} /> Print Audit Log
-        </button>
+    <div className="space-y-6">
+      <div>
+        <p className="font-display font-800 text-2xl text-[#0B3B45]">Admin Settings & User Accounts</p>
+        <p className="text-sm text-[#5B6B68]">System parameters, sachet bag pricing, user credentials, and company details.</p>
       </div>
 
-      <div id="printable-area" className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Price & Unit Setup */}
+        <form onSubmit={handleUpdatePrice} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Settings2 className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Sachet Bag Pricing Setup</p>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Global Sales Price Per Sachet Bag (GH₵)</label>
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={unitPrice}
+              onChange={(e) => setUnitPrice(e.target.value)}
+              className="inp mt-1"
+              required
+            />
+          </div>
+          <button type="submit" className="btn-primary w-full">Update Bag Price</button>
+        </form>
+
+        {/* Business Registration */}
+        <form onSubmit={handleUpdateBusiness} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Building className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Company & GRA Details</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Business Name</label>
+              <input value={bizName} onChange={(e) => setBizName(e.target.value)} placeholder="Company Name" className="inp mt-1" required />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Phone</label>
+              <input value={bizPhone} onChange={(e) => setBizPhone(e.target.value)} placeholder="Phone" className="inp mt-1" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Address / City</label>
+              <input value={bizAddress} onChange={(e) => setBizAddress(e.target.value)} placeholder="Location" className="inp mt-1" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">TIN Number</label>
+              <input value={bizTin} onChange={(e) => setBizTin(e.target.value)} placeholder="TIN" className="inp mt-1" />
+            </div>
+          </div>
+          <button type="submit" className="btn-primary w-full">Save Business Info</button>
+        </form>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Create User Account */}
+        <form onSubmit={handleAddUser} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Users className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Create New User / Driver</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Full Name</label>
+            <input value={userName} onChange={(e) => setUserName(e.target.value)} placeholder="e.g. Ama Serwaa" className="inp mt-1" required />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-500">System Role</label>
+              <select value={userRole} onChange={(e) => setUserRole(e.target.value)} className="inp mt-1">
+                <option value="driver">Delivery Driver</option>
+                <option value="cashier">Plant Cashier</option>
+                <option value="manager">Factory Manager</option>
+                <option value="owner">Business Owner</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Password</label>
+              <input type="text" value={userPassword} onChange={(e) => setUserPassword(e.target.value)} placeholder="123" className="inp mt-1" required />
+            </div>
+          </div>
+
+          {userRole === "driver" && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Truck Number / Reg Plate</label>
+              <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. GT-1022-22" className="inp mt-1" required />
+            </div>
+          )}
+
+          {userRole === "owner" && (
+            <div>
+              <label className="text-xs font-semibold text-gray-500">Admin Recovery Email</label>
+              <input type="email" value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="admin@pureledger.com" className="inp mt-1" required />
+            </div>
+          )}
+
+          <button type="submit" className="btn-primary w-full"><Plus size={15} /> Add User Account</button>
+        </form>
+
+        {/* Change Password */}
+        <form onSubmit={handleResetUserPassword} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+          <div className="flex items-center gap-2 border-b pb-2">
+            <Lock className="text-[#0B3B45]" size={18} />
+            <p className="font-bold text-[#0B3B45]">Reset User Credentials</p>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Target User</label>
+            <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} className="inp mt-1">
+              {usersList.map((u) => (
+                <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-500">New Password</label>
+            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password" className="inp mt-1" required />
+          </div>
+
+          <button type="submit" className="btn-primary w-full">Update Password</button>
+        </form>
+      </div>
+
+      {/* User Accounts List */}
+      <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
+        <p className="font-bold text-[#0B3B45] mb-3">All System Accounts</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
-              <th className="p-2">Timestamp</th>
-              <th className="p-2">User</th>
+              <th className="p-2">Name</th>
               <th className="p-2">Role</th>
-              <th className="p-2">Action</th>
-              <th className="p-2">Details</th>
+              <th className="p-2">Truck / Detail</th>
+              <th className="p-2">Email</th>
+              <th className="p-2 text-center">Action</th>
             </tr>
           </thead>
           <tbody>
-            {logs.length === 0 ? (
-              <tr><td colSpan="5" className="p-4 text-center text-gray-400">No audit records logged.</td></tr>
-            ) : (
-              logs.map((log) => (
-                <tr key={log.id} className="border-t">
-                  <td className="p-2 font-mono text-gray-500">{new Date(log.ts).toLocaleString()}</td>
-                  <td className="p-2 font-bold text-[#0B3B45]">{log.user}</td>
-                  <td className="p-2 uppercase font-mono text-[10px]">{log.role}</td>
-                  <td className="p-2 font-semibold text-blue-900">{log.action}</td>
-                  <td className="p-2 text-gray-600">{log.detail}</td>
-                </tr>
-              ))
-            )}
+            {usersList.map((u) => (
+              <tr key={u.id} className="border-t">
+                <td className="p-2 font-bold text-[#0B3B45]">{u.name}</td>
+                <td className="p-2 uppercase font-mono text-[10px]">{u.role}</td>
+                <td className="p-2 font-mono text-gray-600">{u.truckNo || "N/A"}</td>
+                <td className="p-2 text-gray-500">{u.email || "N/A"}</td>
+                <td className="p-2 text-center">
+                  <button
+                    onClick={() => handleDeleteUser(u.id, u.name)}
+                    className="p-1 text-red-600 hover:bg-red-50 rounded"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
