@@ -1,15 +1,5 @@
 @import "tailwindcss";
 
-:root {
-  color: #16211f;
-  background-color: #f2f4ef;
-  font-family: 'IBM Plex Sans', sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
 * {
   box-sizing: border-box;
 }
@@ -33,9 +23,6 @@ textarea {
   font: inherit;
 }
 
-/* ==========================================================================
-   1. Design Tokens & CSS Variables
-   ========================================================================== */
 :root {
   /* Color Palette - Light Mode */
   --primary: #0284c7;
@@ -88,9 +75,7 @@ textarea {
   }
 }
 
-/* ==========================================================================
-   2. Modern Reset & Base Styles
-   ========================================================================== */
+Reset Vars
 *,
 *::before,
 *::after {
