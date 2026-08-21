@@ -10,11 +10,12 @@ export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
 export async function syncToSupabase(data) {
   if (!supabase || !navigator.onLine) return;
   try {
-    await supabase.from("pureledger_store").upsert({
+    const { error } = await supabase.from("pureledger_store").upsert({
       id: "main_data",
       data,
       updated_at: new Date().toISOString(),
     });
+    if (error) throw error;
   } catch (err) {
     console.error("Supabase sync failed:", err);
   }
