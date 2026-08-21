@@ -167,7 +167,7 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
                 type="email"
                 value={resetEmail}
                 onChange={(e) => { setResetEmail(e.target.value); setError(""); }}
-                placeholder="Enter your emial"
+                placeholder="Enter your email"
                 className="inp mt-1"
                 required
               />

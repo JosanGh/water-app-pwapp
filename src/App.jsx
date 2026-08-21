@@ -18,6 +18,17 @@ import { ReportsModule } from './components/ReportsAndDrivers';
 import { AdminManagementModule } from './components/AdminAndRole';
 import { AuditLog } from './components/AuditLog';
 
+const SESSION_KEY = "pureledger-session";
+
+function loadSession() {
+  try {
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
 // PWA Service Worker Registration
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -28,7 +39,7 @@ if ("serviceWorker" in navigator) {
 }
 
 export default function App() {
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(loadSession);
   const [data, setData] = useState(emptyData);
   const [loaded, setLoaded] = useState(false);
   const [page, setPage] = useState("dashboard");
@@ -83,6 +94,7 @@ export default function App() {
 
   const handleLogin = (s) => {
     setSession(s);
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
     
     // Resolve dynamic landing page from rolesConfig
     const roleMeta = getRoleMeta(s.role);
@@ -93,6 +105,11 @@ export default function App() {
     if (s.role === "owner" && !data.businessDetails?.isRegistered) {
       setShowBusinessModal(true);
     }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem(SESSION_KEY);
+    setSession(null);
   };
 
   const handleResetAdminPassword = (emailInput, newPass) => {
@@ -157,7 +174,7 @@ export default function App() {
           page={page}
           setPage={(p) => { setPage(p); setMobileNavOpen(false); }}
           role={session.role}
-          onLogout={() => setSession(null)}
+          onLogout={handleLogout}
           open={mobileNavOpen}
           onClose={() => setMobileNavOpen(false)}
         />
@@ -166,7 +183,7 @@ export default function App() {
             session={session} 
             online={online} 
             onMenuClick={() => setMobileNavOpen(true)} 
-            onLogout={() => setSession(null)} 
+            onLogout={handleLogout} 
             data={data} 
             mutate={mutate} 
           />
