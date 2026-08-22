@@ -42,11 +42,20 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
 
   const handleForgot = (e) => {
     e.preventDefault();
+
+    if (!resetFullNameInput.trim()) {
+      setError("Please enter the Admin full name.");
+      return;
+    }
+
     if (resetPassword.length < 6) {
       setError("New password must be at least 6 characters long.");
       return;
     }
+
+    // Pass parameters in matching order: (fullName, email, newPassword)
     const ok = onResetAdminPassword(resetFullNameInput, resetEmail, resetPassword);
+    
     if (ok) {
       setSuccessMsg("Admin password updated successfully! Please log in.");
       setView("login");
@@ -55,7 +64,7 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
       setResetPassword("");
       setError("");
     } else {
-      setError("No admin account found matching that email address.");
+      setError("No matching admin account found with provided credentials.");
     }
   };
 
@@ -150,12 +159,12 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Admin Name</label>
+              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Admin Full Name</label>
               <input
                 type="text"
                 value={resetFullNameInput}
                 onChange={(e) => { setResetFullNameInput(e.target.value); setError(""); }}
-                placeholder="Enter your name"
+                placeholder="Enter registered full name"
                 className="inp mt-1"
                 required
               />
@@ -178,7 +187,7 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
               <input
                 type="password"
                 value={resetPassword}
-                onChange={(e) => setResetPassword(e.target.value)}
+                onChange={(e) => { setResetPassword(e.target.value); setError(""); }}
                 placeholder="Set new password"
                 className="inp mt-1"
                 required

@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react';
-import viteLogo from './assets/vite.svg';
 import { Droplets } from "lucide-react";
 import { supabase, syncToSupabase } from './lib/supabaseClient';
 import { emptyData, loadData, saveData } from './lib/storage';
@@ -18,17 +17,6 @@ import { ReportsModule } from './components/ReportsAndDrivers';
 import { AdminManagementModule } from './components/AdminAndRole';
 import { AuditLog } from './components/AuditLog';
 
-const SESSION_KEY = "pureledger-session";
-
-function loadSession() {
-  try {
-    const stored = sessionStorage.getItem(SESSION_KEY);
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
-}
-
 // PWA Service Worker Registration
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -39,7 +27,7 @@ if ("serviceWorker" in navigator) {
 }
 
 export default function App() {
-  const [session, setSession] = useState(loadSession);
+  const [session, setSession] = useState(null);
   const [data, setData] = useState(emptyData);
   const [loaded, setLoaded] = useState(false);
   const [page, setPage] = useState("dashboard");
@@ -94,7 +82,6 @@ export default function App() {
 
   const handleLogin = (s) => {
     setSession(s);
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
     
     // Resolve dynamic landing page from rolesConfig
     const roleMeta = getRoleMeta(s.role);
@@ -107,14 +94,12 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem(SESSION_KEY);
-    setSession(null);
-  };
-
-  const handleResetAdminPassword = (emailInput, newPass) => {
+  const handleResetAdminPassword = (fullNameInput, emailInput, newPass) => {
     const adminUser = (data.users || []).find(
-      (u) => u.email && u.email.toLowerCase() === emailInput.trim().toLowerCase() && u.role === "owner"
+      (u) =>
+        u.role === "owner" &&
+        u.email && u.email.toLowerCase() === emailInput.trim().toLowerCase() &&
+        u.name && u.name.toLowerCase() === fullNameInput.trim().toLowerCase()
     );
 
     if (!adminUser) return false;
@@ -174,7 +159,7 @@ export default function App() {
           page={page}
           setPage={(p) => { setPage(p); setMobileNavOpen(false); }}
           role={session.role}
-          onLogout={handleLogout}
+          onLogout={() => setSession(null)}
           open={mobileNavOpen}
           onClose={() => setMobileNavOpen(false)}
         />
@@ -183,7 +168,7 @@ export default function App() {
             session={session} 
             online={online} 
             onMenuClick={() => setMobileNavOpen(true)} 
-            onLogout={handleLogout} 
+            onLogout={() => setSession(null)} 
             data={data} 
             mutate={mutate} 
           />

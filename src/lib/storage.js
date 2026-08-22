@@ -93,35 +93,77 @@ export function normalizeData(data = {}) {
   };
 }
 
+/**
+ * Loads LocalStorage first. 
+ * Only fetches remote if local storage is completely empty.
+ */
 export async function loadData() {
+  let localData = null;
+
+  // 1. Read from LocalStorage first
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      localData = JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error("Error reading LocalStorage:", e);
+  }
+
+  // 2. If local storage already has data, return it immediately (Offline-First)
+  if (localData) {
+    return normalizeData(localData);
+  }
+
+  // 3. Fallback: Fetch from Supabase ONLY if local storage was empty
   if (supabase && navigator.onLine) {
     try {
-      const { data: remote, error } = await supabase.from("pureledger_store").select("data").eq("id", "main_data").single();
-      if (!error && remote && remote.data) {
+      const { data: remote, error } = await supabase
+        .from("pureledger_store")
+        .select("data")
+        .eq("id", "main_data")
+        .single();
+
+      if (!error && remote?.data) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.data));
         return normalizeData(remote.data);
       }
     } catch (e) {
-      console.warn("Supabase load failed, falling back to local storage", e);
+      console.warn("Supabase initial load failed:", e);
     }
   }
 
-  try {
-    const res = localStorage.getItem(STORAGE_KEY);
-    if (!res) return emptyData;
-    const parsed = JSON.parse(res);
-    return normalizeData(parsed);
-  } catch {
-    return emptyData;
-  }
+  return emptyData;
 }
 
+/**
+ * Saves to LocalStorage first, verifies write success, then syncs to Supabase.
+ */
 export async function saveData(data = {}) {
+  const normalized = normalizeData(data);
+  let localSuccess = false;
+
+  // 1. Save strictly to LocalStorage first
   try {
-    const normalized = normalizeData(data);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-    syncToSupabase(normalized);
+    const serialized = JSON.stringify(normalized);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    localSuccess = true;
   } catch (e) {
-    console.error("Storage save failed", e);
+    if (e.name === "QuotaExceededError" || e.code === 22) {
+      console.error("LocalStorage quota exceeded! Free up space or archive audit logs.");
+    } else {
+      console.error("LocalStorage write failed:", e);
+    }
   }
+
+  // 2. Sync to Supabase ONLY if local storage save succeeded and network is available
+  if (localSuccess && navigator.onLine) {
+    try {
+      await syncToSupabase(normalized);
+    } catch (err) {
+      console.warn("Background sync failed; local data remains persisted.", err);
+    }
+  }
+
+  return localSuccess;
 }
