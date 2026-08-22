@@ -17,6 +17,9 @@ import { ReportsModule } from './components/ReportsAndDrivers';
 import { AdminManagementModule } from './components/AdminAndRole';
 import { AuditLog } from './components/AuditLog';
 
+const SESSION_STORAGE_KEY = "pureledger_active_session";
+const ACTIVE_PAGE_KEY = "pureledger_active_page";
+
 // PWA Service Worker Registration
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -27,10 +30,22 @@ if ("serviceWorker" in navigator) {
 }
 
 export default function App() {
-  const [session, setSession] = useState(null);
+  // Restore session & page from sessionStorage on app mount
+  const [session, setSession] = useState(() => {
+    try {
+      const savedSession = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      return savedSession ? JSON.parse(savedSession) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [page, setPage] = useState(() => {
+    return sessionStorage.getItem(ACTIVE_PAGE_KEY) || "dashboard";
+  });
+
   const [data, setData] = useState(emptyData);
   const [loaded, setLoaded] = useState(false);
-  const [page, setPage] = useState("dashboard");
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -57,6 +72,12 @@ export default function App() {
     };
   }, [loaded, data]);
 
+  // Persist current page to sessionStorage when changed
+  const handlePageChange = useCallback((newPage) => {
+    setPage(newPage);
+    sessionStorage.setItem(ACTIVE_PAGE_KEY, newPage);
+  }, []);
+
   const showToast = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone });
     setTimeout(() => setToast(null), 3000);
@@ -75,23 +96,39 @@ export default function App() {
           }
         : draft;
 
-      setTimeout(() => saveData(withAudit), 0);
+      // Persist entries immediately to local storage
+      saveData(withAudit);
       return withAudit;
     });
   }, [session]);
 
   const handleLogin = (s) => {
     setSession(s);
-    
-    // Resolve dynamic landing page from rolesConfig
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(s));
+
     const roleMeta = getRoleMeta(s.role);
-    setPage(roleMeta.defaultLandingPage || "dashboard");
+    const initialPage = roleMeta.defaultLandingPage || "dashboard";
+    handlePageChange(initialPage);
 
     showToast(`Welcome, ${s.name}`);
 
     if (s.role === "owner" && !data.businessDetails?.isRegistered) {
       setShowBusinessModal(true);
     }
+  };
+
+  const handleLogout = async () => {
+    // 1. Force flush current local storage entries
+    await saveData(data);
+
+    // 2. Clear tab session memory
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    sessionStorage.removeItem(ACTIVE_PAGE_KEY);
+
+    // 3. Reset React state
+    setSession(null);
+    setPage("dashboard");
+    showToast("Signed out successfully");
   };
 
   const handleResetAdminPassword = (fullNameInput, emailInput, newPass) => {
@@ -157,9 +194,9 @@ export default function App() {
       <div className="flex">
         <Sidebar
           page={page}
-          setPage={(p) => { setPage(p); setMobileNavOpen(false); }}
+          setPage={(p) => { handlePageChange(p); setMobileNavOpen(false); }}
           role={session.role}
-          onLogout={() => setSession(null)}
+          onLogout={handleLogout}
           open={mobileNavOpen}
           onClose={() => setMobileNavOpen(false)}
         />
@@ -168,7 +205,7 @@ export default function App() {
             session={session} 
             online={online} 
             onMenuClick={() => setMobileNavOpen(true)} 
-            onLogout={() => setSession(null)} 
+            onLogout={handleLogout} 
             data={data} 
             mutate={mutate} 
           />
