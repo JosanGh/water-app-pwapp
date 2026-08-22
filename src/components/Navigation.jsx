@@ -12,7 +12,7 @@ export function Sidebar({ page, setPage, role, onLogout, open, onClose }) {
     { id: "production", label: "Production Logs", icon: Droplets },
     { id: "sales", label: "Sales & Cash", icon: Wallet },
     { id: "reports", label: "Reports & Drivers", icon: FileBarChart },
-    { id: "admin", label: "Admin & Roles", icon: KeyRound },
+    { id: "admin", label: "Admin & Users", icon: KeyRound },
     { id: "audit", label: "Audit Trail", icon: ShieldCheck },
   ];
 
