@@ -1,6 +1,9 @@
 # Logs
-logs
+logs/
 *.log
+*.syslog
+*.pid
+*.seed
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -22,3 +25,102 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+*.env.*
+!.env.example
+!.env.template
+
+# API Keys, Certificates, Credentials
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+client_secret*.json
+serviceAccountKey.json
+supabase-keys.json
+
+# ------------------------------------------------------------------------------
+# 2. Dependencies & Package Managers
+# ------------------------------------------------------------------------------
+node_modules/
+jspm_packages/
+web_modules/
+
+# Package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ------------------------------------------------------------------------------
+# 3. Build & Distribution Outputs
+# ------------------------------------------------------------------------------
+dist/
+build/
+out/
+.next/
+.serverless/
+*.tsbuildinfo
+
+# ------------------------------------------------------------------------------
+# 4. Databases, Local Storage & Dumps
+# ------------------------------------------------------------------------------
+# Local DB / SQLite files
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+
+# Database dumps & SQL exports
+dumps/
+*.sql
+*.sql.gz
+*.tar.gz
+
+# Supabase Local CLI & Cache state
+.supabase/
+supabase/.temp/
+supabase/.branches/
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains IDEs (WebStorm, IntelliJ)
+.idea/
+*.iws
+*.iml
+
+# Other Editors
+*.swp
+*.swo
+*~
+
+coverage/
+.nyc_output/
+.playwright/
+test-results/
+cypress/videos/
+cypress/screenshots/
+.cache/
+.eslintcache
+.turbo/
+.vercel/

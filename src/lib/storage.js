@@ -1,4 +1,4 @@
-import { supabase, syncToSupabase } from './supabaseClient';
+import { supabase, syncToSupabase, backfillNormalizedFromBlob } from './supabaseClient';
 
 export const DEFAULT_EXPENSE_CATEGORIES = [
   "Utilities & Fuel",
@@ -13,6 +13,7 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
 ];
 
 export const STORAGE_KEY = "pureledger-ghana-erp-db";
+export const BACKFILL_KEY = "pureledger_normalized_backfilled";
 
 export const emptyData = {
   rolesConfig: {
@@ -112,6 +113,8 @@ export async function loadData() {
 
   // 2. If local storage already has data, return it immediately (Offline-First)
   if (localData) {
+    // Trigger one-time backfill to normalized tables in background
+    triggerBackfill(localData);
     return normalizeData(localData);
   }
 
@@ -126,6 +129,7 @@ export async function loadData() {
 
       if (!error && remote?.data) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.data));
+        triggerBackfill(remote.data);
         return normalizeData(remote.data);
       }
     } catch (e) {
@@ -134,6 +138,18 @@ export async function loadData() {
   }
 
   return emptyData;
+}
+
+async function triggerBackfill(data) {
+  if (localStorage.getItem(BACKFILL_KEY)) return;
+  if (!supabase || !navigator.onLine) return;
+  
+  try {
+    await backfillNormalizedFromBlob(data);
+    localStorage.setItem(BACKFILL_KEY, "true");
+  } catch (e) {
+    console.warn("Background backfill failed:", e);
+  }
 }
 
 /**
@@ -156,13 +172,18 @@ export async function saveData(data = {}) {
     }
   }
 
-  // 2. Sync to Supabase ONLY if local storage save succeeded and network is available
+  // 2. Sync to Supabase blob ONLY if local storage save succeeded and network is available
   if (localSuccess && navigator.onLine) {
     try {
       await syncToSupabase(normalized);
     } catch (err) {
       console.warn("Background sync failed; local data remains persisted.", err);
     }
+  }
+
+  // 3. Trigger backfill to normalized tables if not already done
+  if (localSuccess) {
+    triggerBackfill(normalized);
   }
 
   return localSuccess;
