@@ -9,6 +9,35 @@ export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY)
 
 const isSupabaseReady = () => supabase && navigator.onLine;
 
+export function getSupabaseStatus() {
+  return {
+    configured: Boolean(supabase),
+    online: typeof navigator !== "undefined" && navigator.onLine,
+  };
+}
+
+export async function fetchFromSupabase() {
+  if (!isSupabaseReady()) return { success: false, reason: "offline_or_no_client" };
+
+  try {
+    const { data, error } = await supabase
+      .from("pureledger_store")
+      .select("data, updated_at")
+      .eq("id", "main_data")
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Supabase remote load error:", error.message);
+      return { success: false, error };
+    }
+
+    return { success: true, data: data?.data || null, updatedAt: data?.updated_at || null };
+  } catch (err) {
+    console.warn("Supabase remote load exception:", err);
+    return { success: false, error: err };
+  }
+}
+
 /**
  * Safely syncs locally persisted data to Supabase blob table.
  * Kept for backward compatibility with existing pureledger_store table.

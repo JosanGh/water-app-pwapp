@@ -1,4 +1,9 @@
-import { supabase, syncToSupabase, backfillNormalizedFromBlob } from './supabaseClient';
+import {
+  supabase,
+  syncToSupabase,
+  fetchFromSupabase,
+  backfillNormalizedFromBlob,
+} from "./supabaseClient";
 
 export const DEFAULT_EXPENSE_CATEGORIES = [
   "Utilities & Fuel",
@@ -9,7 +14,7 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
   "Administrative & Office",
   "Taxes, GRA & Regulatory Fees",
   "Marketing & Promotional",
-  "Miscellaneous Expenses"
+  "Miscellaneous Expenses",
 ];
 
 export const STORAGE_KEY = "pureledger-ghana-erp-db";
@@ -17,17 +22,51 @@ export const BACKFILL_KEY = "pureledger_normalized_backfilled";
 
 export const emptyData = {
   rolesConfig: {
-    owner: { label: "Business Owner", desc: "Full control · Financials · Price setup · Transfers", icon: "ShieldCheck" },
-    manager: { label: "Manager", desc: "Operations · Production · Stock Acceptance", icon: "Users" },
-    cashier: { label: "Cashier", desc: "Driver & Customer Sales Entry", icon: "Wallet" },
-    driver: { label: "Delivery Driver", desc: "Delivery Operations", icon: "Truck" },
+    owner: {
+      label: "Business Owner",
+      desc: "Full control · Financials · Price setup · Transfers",
+      icon: "ShieldCheck",
+    },
+    manager: {
+      label: "Manager",
+      desc: "Operations · Production · Stock Acceptance",
+      icon: "Users",
+    },
+    cashier: {
+      label: "Cashier",
+      desc: "Driver & Customer Sales Entry",
+      icon: "Wallet",
+    },
+    driver: {
+      label: "Delivery Driver",
+      desc: "Delivery Operations",
+      icon: "Truck",
+    },
   },
   users: [
-    { id: "u1", name: "Super Admin", role: "owner", password: "123", email: "admin@pureledger.com" },
+    {
+      id: "u1",
+      name: "Super Admin",
+      role: "owner",
+      password: "123",
+      email: "admin@pureledger.com",
+    },
     { id: "u2", name: "Factory Manager", role: "manager", password: "123" },
     { id: "u3", name: "Plant Cashier", role: "cashier", password: "123" },
-    { id: "d1", name: "Kwame (Truck GT-1022-22)", role: "driver", password: "123", truckNo: "GT-1022-22" },
-    { id: "d2", name: "Kofi (Truck WR-5541-21)", role: "driver", password: "123", truckNo: "WR-5541-21" },
+    {
+      id: "d1",
+      name: "Kwame (Truck GT-1022-22)",
+      role: "driver",
+      password: "123",
+      truckNo: "GT-1022-22",
+    },
+    {
+      id: "d2",
+      name: "Kofi (Truck WR-5541-21)",
+      role: "driver",
+      password: "123",
+      truckNo: "WR-5541-21",
+    },
   ],
   businessDetails: {
     name: "Mattbees Water Services",
@@ -41,7 +80,7 @@ export const emptyData = {
   machines: [
     "Machine 1 - Koyo Cutting Line",
     "Machine 2 - High Speed Sachet Line",
-    "Machine 3 - Secondary Line"
+    "Machine 3 - Secondary Line",
   ],
   intake: [],
   issuance: [],
@@ -74,7 +113,10 @@ export function normalizeData(data = {}) {
     expenseCategories: data?.expenseCategories || DEFAULT_EXPENSE_CATEGORIES,
     machines: data?.machines || emptyData.machines,
     settings: { ...emptyData.settings, ...(data?.settings || {}) },
-    businessDetails: { ...emptyData.businessDetails, ...(data?.businessDetails || {}) },
+    businessDetails: {
+      ...emptyData.businessDetails,
+      ...(data?.businessDetails || {}),
+    },
     users: data?.users || emptyData.users,
     rollTypes: data?.rollTypes || [],
     intake: data?.intake || [],
@@ -95,7 +137,7 @@ export function normalizeData(data = {}) {
 }
 
 /**
- * Loads LocalStorage first. 
+ * Loads LocalStorage first.
  * Only fetches remote if local storage is completely empty.
  */
 export async function loadData() {
@@ -111,39 +153,46 @@ export async function loadData() {
     console.error("Error reading LocalStorage:", e);
   }
 
-  // 2. If local storage already has data, return it immediately (Offline-First)
+  // 2. When online, remote data is authoritative so changes made by another
+  // user (including expense categories) reach this device.
+  if (supabase && navigator.onLine) {
+    const remoteResult = await fetchFromSupabase();
+    if (
+      remoteResult.success &&
+      remoteResult.data &&
+      Object.keys(remoteResult.data).length > 0
+    ) {
+      const remoteData = normalizeData(remoteResult.data);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(remoteData));
+      triggerBackfill(remoteData);
+      return remoteData;
+    }
+  }
+
+  // 3. Offline fallback keeps the last locally persisted copy usable.
   if (localData) {
-    // Trigger one-time backfill to normalized tables in background
     triggerBackfill(localData);
     return normalizeData(localData);
   }
 
-  // 3. Fallback: Fetch from Supabase ONLY if local storage was empty
-  if (supabase && navigator.onLine) {
-    try {
-      const { data: remote, error } = await supabase
-        .from("pureledger_store")
-        .select("data")
-        .eq("id", "main_data")
-        .single();
+  return normalizeData(emptyData);
+}
 
-      if (!error && remote?.data) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(remote.data));
-        triggerBackfill(remote.data);
-        return normalizeData(remote.data);
-      }
-    } catch (e) {
-      console.warn("Supabase initial load failed:", e);
-    }
-  }
+export async function refreshData() {
+  const result = await fetchFromSupabase();
+  if (!result.success || !result.data || Object.keys(result.data).length === 0)
+    return null;
 
-  return emptyData;
+  const normalized = normalizeData(result.data);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  triggerBackfill(normalized);
+  return normalized;
 }
 
 async function triggerBackfill(data) {
   if (localStorage.getItem(BACKFILL_KEY)) return;
   if (!supabase || !navigator.onLine) return;
-  
+
   try {
     await backfillNormalizedFromBlob(data);
     localStorage.setItem(BACKFILL_KEY, "true");
@@ -166,7 +215,9 @@ export async function saveData(data = {}) {
     localSuccess = true;
   } catch (e) {
     if (e.name === "QuotaExceededError" || e.code === 22) {
-      console.error("LocalStorage quota exceeded! Free up space or archive audit logs.");
+      console.error(
+        "LocalStorage quota exceeded! Free up space or archive audit logs.",
+      );
     } else {
       console.error("LocalStorage write failed:", e);
     }
@@ -177,7 +228,10 @@ export async function saveData(data = {}) {
     try {
       await syncToSupabase(normalized);
     } catch (err) {
-      console.warn("Background sync failed; local data remains persisted.", err);
+      console.warn(
+        "Background sync failed; local data remains persisted.",
+        err,
+      );
     }
   }
 

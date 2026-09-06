@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Droplets, Mail } from "lucide-react";
+import { TermsAndPolicy } from './TermsAndPolicy';
 
 export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdminPassword }) {
   const [view, setView] = useState("login");
@@ -70,7 +71,7 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
 
   return (
     <div className="min-h-screen bg-[#0B3B45] flex items-center justify-center p-6">
-      <div className="relative w-full max-w-md bg-[#F2F4EF] rounded-2xl p-6 shadow-2xl">
+      <div className={`relative w-full ${view === "terms" ? "max-w-3xl" : "max-w-md"} bg-[#F2F4EF] rounded-2xl p-6 shadow-2xl`}>
         <div className="flex items-center gap-2.5 justify-center mb-6">
           <div className="w-10 h-10 rounded-lg bg-[#1C8C9E] flex items-center justify-center">
             <Droplets size={20} className="text-[#0B3B45]" />
@@ -81,7 +82,9 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
           </div>
         </div>
 
-        {view === "login" && (
+        {view === "terms" ? (
+          <TermsAndPolicy onBack={() => setView("login")} />
+        ) : view === "login" && (
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
 
@@ -145,6 +148,9 @@ export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdmi
                 className="text-xs text-gray-600 hover:underline flex items-center justify-center gap-1"
               >
                 <Mail size={13} /> Admin Password Reset (Email Auth)
+              </button>
+              <button type="button" onClick={() => setView("terms")} className="text-xs text-[#0B3B45] hover:underline">
+                Read Terms & Policy
               </button>
             </div>
           </form>
