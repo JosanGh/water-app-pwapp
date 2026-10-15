@@ -40,112 +40,63 @@ export function WarehouseModule({ data = {}, mutate, session = {}, showToast }) 
 /*  ROLL SUB-COMPONENTS                                                   */
 /* ---------------------------------------------------------------------- */
 function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
-  const [selectedTypeId, setSelectedTypeId] = useState("new");
-  const [rollTypeName, setRollTypeName] = useState("");
-  const [kgPerRoll, setKgPerRoll] = useState("");
-  const [supplier, setSupplier] = useState("");
+  const [totalKg, setTotalKg] = useState("");
   const [qty, setQty] = useState("");
+  const [supplier, setSupplier] = useState("");
 
-  const handleCreateTypeAndIntake = (e) => {
+  const handleIntake = (e) => {
     e.preventDefault();
     const parsedQty = Number(qty) || 0;
-    if (parsedQty <= 0) return showToast("Quantity must be positive!", "warn");
+    const parsedKg = Number(totalKg) || 0;
 
-    let typeId = selectedTypeId;
-    let typeName = rollTypeName;
-    let weightPerRoll = Number(kgPerRoll) || 0;
+    if (parsedQty <= 0) return showToast("Quantity of rolls must be positive!", "warn");
+    if (parsedKg <= 0) return showToast("Total weight in kg must be positive!", "warn");
 
-    if (selectedTypeId === "new") {
-      if (!rollTypeName.trim() || weightPerRoll <= 0) {
-        return showToast("Provide a valid Roll Type Name and Weight per roll!", "warn");
-      }
-      const existing = (data?.rollTypes || []).find(
-        (t) => t.name.trim().toLowerCase() === rollTypeName.trim().toLowerCase()
-      );
-      if (existing) {
-        typeId = existing.id;
-        typeName = existing.name;
-        weightPerRoll = Number(existing.standardWeightKg) || 0;
-      } else {
-        typeId = uid();
-      }
-    } else {
-      const existing = (data?.rollTypes || []).find((t) => t.id === selectedTypeId);
-      if (existing) {
-        typeName = existing.name;
-        weightPerRoll = Number(existing.standardWeightKg) || 0;
-      }
-    }
+    const calculatedKgPerRoll = parsedKg / parsedQty;
 
-    mutate((prev) => {
-      const rollTypeExists = (prev?.rollTypes || []).some((t) => t.id === typeId);
-      const nextRollTypes = rollTypeExists
-        ? prev.rollTypes
-        : [...(prev?.rollTypes || []), { id: typeId, name: typeName.trim(), standardWeightKg: weightPerRoll, yieldValue: 900 }];
+    mutate((prev) => ({
+      ...prev,
+      intake: [
+        {
+          id: uid(),
+          date: todayISO(),
+          supplier,
+          qty: parsedQty,
+          weightKg: parsedKg,
+          kgPerRoll: calculatedKgPerRoll
+        },
+        ...(prev?.intake || []),
+      ],
+    }), "Recorded Roll Intake", `${parsedQty} rolls (${parsedKg} kg)`);
 
-      return {
-        ...prev,
-        rollTypes: nextRollTypes,
-        intake: [
-          { id: uid(), date: todayISO(), rollTypeId: typeId, supplier, qty: parsedQty, weightKg: parsedQty * weightPerRoll },
-          ...(prev?.intake || []),
-        ],
-      };
-    }, "Recorded Roll Intake", `${parsedQty} rolls of ${typeName}`);
-
-    setRollTypeName(""); setKgPerRoll(""); setSupplier(""); setQty(""); setSelectedTypeId("new");
+    setTotalKg("");
+    setQty("");
+    setSupplier("");
     showToast("Roll Intake Recorded!");
   };
 
   return (
     <div className="grid lg:grid-cols-2 gap-4">
-      <form onSubmit={handleCreateTypeAndIntake} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
+      <form onSubmit={handleIntake} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
         <p className="font-bold text-[#0B3B45]">Owner Raw Roll Intake</p>
-
-        <div>
-          <label className="text-xs font-semibold text-gray-500">Roll Category</label>
-          <select
-            value={selectedTypeId}
-            onChange={(e) => {
-              setSelectedTypeId(e.target.value);
-              if (e.target.value !== "new") {
-                const existing = (data?.rollTypes || []).find((t) => t.id === e.target.value);
-                if (existing) setKgPerRoll(String(existing.standardWeightKg));
-              }
-            }}
-            className="inp"
-          >
-            <option value="new">+ Create New Roll Type</option>
-            {(data?.rollTypes || []).map((t) => (
-              <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg/roll)</option>
-            ))}
-          </select>
-        </div>
-
-        {selectedTypeId === "new" && (
-          <div>
-            <label className="text-xs font-semibold text-gray-500">New Roll Type Name</label>
-            <input value={rollTypeName} onChange={(e) => setRollTypeName(e.target.value)} placeholder="e.g. Standard 25kg Film" className="inp" required={selectedTypeId === "new"} />
-          </div>
-        )}
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-xs font-semibold text-gray-500">Weight per Roll (kg)</label>
+            <label className="text-xs font-semibold text-gray-500">Number of Rolls (Roll Count)</label>
+            <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="10" className="inp" required />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Total Weight (kg)</label>
             <input
               type="number"
               min="0.1"
               step="0.1"
-              value={kgPerRoll}
-              onChange={(e) => setKgPerRoll(e.target.value)}
-              placeholder="25"
+              value={totalKg}
+              onChange={(e) => setTotalKg(e.target.value)}
+              placeholder="250"
               className="inp"
-              disabled={selectedTypeId !== "new"}
+              required
             />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Quantity Rolls (Roll Count)</label>
-            <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="10" className="inp" required />
           </div>
         </div>
 
@@ -162,22 +113,27 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
-              <th className="p-2">Roll Type</th>
               <th className="p-2">Supplier</th>
               <th className="p-2 text-right">Roll Count</th>
-              <th className="p-2 text-right">Weight (kg)</th>
+              <th className="p-2 text-right">Total Weight (kg)</th>
+              <th className="p-2 text-right">Kg / Roll</th>
             </tr>
           </thead>
           <tbody>
-            {(data?.intake || []).map((r) => (
-              <tr key={r.id} className="border-t">
-                <td className="p-2 font-mono">{r.date}</td>
-                <td className="p-2 font-semibold">{(data?.rollTypes || []).find((t) => t.id === r.rollTypeId)?.name || "Film"}</td>
-                <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
-                <td className="p-2 text-right font-mono font-bold">{r.qty} rolls</td>
-                <td className="p-2 text-right font-mono">{r.weightKg} kg</td>
-              </tr>
-            ))}
+            {(data?.intake || []).map((r) => {
+              const rollCount = Number(r.qty) || 0;
+              const totalWeight = Number(r.weightKg) || 0;
+              const unitKg = rollCount > 0 ? totalWeight / rollCount : 0;
+              return (
+                <tr key={r.id} className="border-t">
+                  <td className="p-2 font-mono">{r.date}</td>
+                  <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
+                  <td className="p-2 text-right font-mono font-bold">{rollCount} rolls</td>
+                  <td className="p-2 text-right font-mono">{totalWeight} kg</td>
+                  <td className="p-2 text-right font-mono text-gray-500">{unitKg.toFixed(2)} kg/roll</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -186,24 +142,17 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
 }
 
 function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
-  const [rollTypeId, setRollTypeId] = useState((data?.rollTypes || [])[0]?.id || "");
+  const [rollName, setRollName] = useState("");
   const [qty, setQty] = useState("");
-
-  useEffect(() => {
-    if ((data?.rollTypes || []).length > 0 && !rollTypeId) {
-      setRollTypeId(data.rollTypes[0].id);
-    }
-  }, [data?.rollTypes, rollTypeId]);
+  const [weightKg, setWeightKg] = useState("");
 
   const handleIssue = (e) => {
     e.preventDefault();
     const parsedQty = Number(qty) || 0;
+    const parsedWeight = Number(weightKg) || 0;
+
     if (parsedQty <= 0) return showToast("Enter a positive quantity of rolls!", "warn");
-
-    const rType = (data?.rollTypes || []).find((t) => t.id === rollTypeId);
-    if (!rType) return showToast("Select a valid roll type", "warn");
-
-    const weightKg = parsedQty * (Number(rType.standardWeightKg) || 0);
+    if (parsedWeight <= 0) return showToast("Enter a valid weight in kg for the rolls!", "warn");
 
     mutate((prev) => ({
       ...prev,
@@ -211,10 +160,10 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
         {
           id: uid(),
           date: todayISO(),
-          rollTypeId,
+          rollName: rollName.trim() || "General Film Roll",
           qty: parsedQty,
           rollsCount: parsedQty,
-          weightKg,
+          weightKg: parsedWeight,
           status: "PENDING",
           issuedBy: session?.name || "Admin",
           confirmedBy: null,
@@ -224,7 +173,9 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
       ],
     }), "Issued Rolls to Manager", `${parsedQty} rolls issued to Manager`);
 
+    setRollName("");
     setQty("");
+    setWeightKg("");
     showToast("Rolls Issued! Pending Manager Confirmation.");
   };
 
@@ -233,16 +184,33 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
       <p className="font-bold text-[#0B3B45]">Issue Film Rolls to Manager</p>
       <form onSubmit={handleIssue} className="space-y-3">
         <div>
-          <label className="text-xs font-semibold text-gray-500">Select Roll Type</label>
-          <select value={rollTypeId} onChange={(e) => setRollTypeId(e.target.value)} className="inp" required>
-            {(data?.rollTypes || []).map((t) => (
-              <option key={t.id} value={t.id}>{t.name} ({t.standardWeightKg} kg/roll)</option>
-            ))}
-          </select>
+          <label className="text-xs font-semibold text-gray-500">Roll Name / Description (Optional)</label>
+          <input
+            type="text"
+            value={rollName}
+            onChange={(e) => setRollName(e.target.value)}
+            placeholder="e.g. Standard 25kg Film or Batch A"
+            className="inp"
+          />
         </div>
-        <div>
-          <label className="text-xs font-semibold text-gray-500">Number of Rolls to Issue (Roll Count)</label>
-          <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="5" className="inp" required />
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Number of Rolls</label>
+            <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="5" className="inp" required />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-gray-500">Total Weight (kg)</label>
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={weightKg}
+              onChange={(e) => setWeightKg(e.target.value)}
+              placeholder="125"
+              className="inp"
+              required
+            />
+          </div>
         </div>
         <button type="submit" className="btn-primary w-full">Transfer Rolls to Production Floor</button>
       </form>
@@ -253,13 +221,12 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
 function ManagerRollAcceptanceTab({ data = {}, mutate, session = {}, showToast }) {
   const managerAccepted = useMemo(() => computeManagerAcceptedRolls(data), [data]);
 
-  const handleAccept = (issuanceId, physicalRollsCountInput) => {
+  const handleAccept = (issuanceId, physicalRollsCountInput, verifiedWeightKgInput) => {
     const parsedCount = Number(physicalRollsCountInput) || 0;
-    if (parsedCount <= 0) return showToast("Enter a valid physical roll count!", "warn");
+    const parsedWeight = Number(verifiedWeightKgInput) || 0;
 
-    const issuanceRecord = (data?.issuance || []).find(i => i.id === issuanceId);
-    const rType = (data?.rollTypes || []).find(t => t.id === issuanceRecord?.rollTypeId);
-    const weightKgCalculated = rType ? parsedCount * (Number(rType.standardWeightKg) || 0) : (Number(issuanceRecord?.weightKg) || 0);
+    if (parsedCount <= 0) return showToast("Enter a valid physical roll count!", "warn");
+    if (parsedWeight <= 0) return showToast("Enter a valid total weight in kg!", "warn");
 
     mutate((prev) => {
       const nextIssuance = (prev?.issuance || []).map((item) =>
@@ -271,7 +238,7 @@ function ManagerRollAcceptanceTab({ data = {}, mutate, session = {}, showToast }
               confirmedBy: session?.name || "Manager",
               physicalCount: parsedCount,
               rollsCount: parsedCount,
-              weightKg: weightKgCalculated
+              weightKg: parsedWeight
             }
           : item
       );
@@ -281,7 +248,7 @@ function ManagerRollAcceptanceTab({ data = {}, mutate, session = {}, showToast }
         ts: new Date().toLocaleTimeString(),
         read: false,
         title: "Manager Roll Count Acceptance",
-        msg: `Manager ${session?.name || "Manager"} accepted ${parsedCount} rolls (${weightKgCalculated} kg) for transfer ID #${issuanceId.slice(0,5)}`,
+        msg: `Manager ${session?.name || "Manager"} accepted ${parsedCount} rolls (${parsedWeight} kg) for transfer ID #${issuanceId.slice(0,5)}`,
       };
 
       return {
@@ -299,7 +266,7 @@ function ManagerRollAcceptanceTab({ data = {}, mutate, session = {}, showToast }
       <div className="bg-white p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center">
         <div>
           <p className="font-bold text-sm text-[#0B3B45]">Manager Accepted Rolls Balance</p>
-          <p className="text-xs text-gray-500">Recorded as physical number of rolls received.</p>
+          <p className="text-xs text-gray-500">Recorded as physical number of rolls received and weight.</p>
         </div>
         <div className="text-right">
           <p className="text-2xl font-mono font-bold text-[#1C8C9E]">{fmt(managerAccepted?.rollsCount, 0)} rolls</p>
@@ -308,25 +275,24 @@ function ManagerRollAcceptanceTab({ data = {}, mutate, session = {}, showToast }
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-        <p className="font-bold text-[#0B3B45] mb-3">Roll Custody Transfers & Number of Rolls Acceptance</p>
+        <p className="font-bold text-[#0B3B45] mb-3">Roll Custody Transfers & Acceptance</p>
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
-              <th className="p-2">Roll Type</th>
+              <th className="p-2">Roll Name</th>
               <th className="p-2 text-right">Issued Rolls</th>
-              <th className="p-2 text-right">Estimated Weight</th>
+              <th className="p-2 text-right">Weight (kg)</th>
               <th className="p-2">Status</th>
-              <th className="p-2">Physical Rolls Received & Confirm</th>
+              <th className="p-2">Physical Count, Weight & Confirm</th>
             </tr>
           </thead>
           <tbody>
             {(data?.issuance || []).map((item) => {
-              const rType = (data?.rollTypes || []).find((t) => t.id === item.rollTypeId);
               return (
                 <tr key={item.id} className="border-t">
                   <td className="p-2 font-mono">{item.date}</td>
-                  <td className="p-2 font-semibold">{rType?.name || "Roll"}</td>
+                  <td className="p-2 font-semibold">{item.rollName || "Film Roll"}</td>
                   <td className="p-2 text-right font-mono font-bold">{item.qty ?? item.rollsCount} rolls</td>
                   <td className="p-2 text-right font-mono">{item.weightKg} kg</td>
                   <td className="p-2">
@@ -336,9 +302,9 @@ function ManagerRollAcceptanceTab({ data = {}, mutate, session = {}, showToast }
                   </td>
                   <td className="p-2">
                     {item.status === "PENDING" ? (
-                      <AcceptForm session={session} label="Rolls Received" onAccept={(count) => handleAccept(item.id, count)} />
+                      <AcceptRollForm session={session} defaultWeight={item.weightKg} onAccept={(count, weight) => handleAccept(item.id, count, weight)} />
                     ) : (
-                      <span className="text-gray-600 font-mono">Confirmed: <strong>{item.physicalCount} rolls</strong> by {item.confirmedBy}</span>
+                      <span className="text-gray-600 font-mono">Confirmed: <strong>{item.physicalCount} rolls</strong> ({item.weightKg} kg) by {item.confirmedBy}</span>
                     )}
                   </td>
                 </tr>
@@ -599,6 +565,49 @@ function ManagerBagAcceptanceTab({ data = {}, mutate, session = {}, showToast })
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function AcceptRollForm({ session = {}, defaultWeight = "", onAccept }) {
+  const isManager = session?.role === "manager" || session?.role === "owner";
+  const [cnt, setCnt] = useState("");
+  const [weight, setWeight] = useState(defaultWeight || "");
+
+  if (!isManager) return null;
+
+  return (
+    <div className="flex gap-1 items-center flex-wrap">
+      <input
+        type="number"
+        min="1"
+        value={cnt}
+        onChange={(e) => setCnt(e.target.value)}
+        placeholder="Rolls count"
+        className="inp py-1 text-xs w-24"
+        required
+      />
+      <input
+        type="number"
+        min="0.1"
+        step="0.1"
+        value={weight}
+        onChange={(e) => setWeight(e.target.value)}
+        placeholder="Weight kg"
+        className="inp py-1 text-xs w-24"
+        required
+      />
+      <button
+        type="button"
+        onClick={() => {
+          if (Number(cnt) > 0 && Number(weight) > 0) {
+            onAccept(cnt, weight);
+          }
+        }}
+        className="btn-success text-xs py-1 px-2"
+      >
+        Accept
+      </button>
     </div>
   );
 }
