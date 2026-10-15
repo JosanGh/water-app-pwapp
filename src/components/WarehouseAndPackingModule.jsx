@@ -78,7 +78,7 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
   return (
     <div className="grid lg:grid-cols-2 gap-4">
       <form onSubmit={handleIntake} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-        <p className="font-bold text-[#0B3B45]">Owner Raw Roll Intake</p>
+        <p className="font-bold text-[#0B3B45]">Owner Raw Roll Intake (Kg & Count Only)</p>
 
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -123,7 +123,7 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
             {(data?.intake || []).map((r) => {
               const rollCount = Number(r.qty) || 0;
               const totalWeight = Number(r.weightKg) || 0;
-              const unitKg = rollCount > 0 ? totalWeight / rollCount : 0;
+              const unitKg = rollCount > 0 ? totalWeight / rollCount : (Number(r.kgPerRoll) || 0);
               return (
                 <tr key={r.id} className="border-t">
                   <td className="p-2 font-mono">{r.date}</td>
@@ -144,15 +144,25 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
 function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
   const [rollName, setRollName] = useState("");
   const [qty, setQty] = useState("");
-  const [weightKg, setWeightKg] = useState("");
+
+  // Calculate average kg per roll from registered intake stock ratio
+  const totalIntakeQty = useMemo(() => {
+    return (data?.intake || []).reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+  }, [data?.intake]);
+
+  const totalIntakeKg = useMemo(() => {
+    return (data?.intake || []).reduce((sum, r) => sum + (Number(r.weightKg) || 0), 0);
+  }, [data?.intake]);
+
+  const avgKgPerRoll = totalIntakeQty > 0 ? totalIntakeKg / totalIntakeQty : 0;
+
+  const parsedQty = Number(qty) || 0;
+  const calculatedWeightKg = Number((parsedQty * avgKgPerRoll).toFixed(2));
 
   const handleIssue = (e) => {
     e.preventDefault();
-    const parsedQty = Number(qty) || 0;
-    const parsedWeight = Number(weightKg) || 0;
-
     if (parsedQty <= 0) return showToast("Enter a positive quantity of rolls!", "warn");
-    if (parsedWeight <= 0) return showToast("Enter a valid weight in kg for the rolls!", "warn");
+    if (totalIntakeQty <= 0) return showToast("No registered roll intake found to calculate weight from!", "warn");
 
     mutate((prev) => ({
       ...prev,
@@ -163,7 +173,7 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
           rollName: rollName.trim() || "General Film Roll",
           qty: parsedQty,
           rollsCount: parsedQty,
-          weightKg: parsedWeight,
+          weightKg: calculatedWeightKg,
           status: "PENDING",
           issuedBy: session?.name || "Admin",
           confirmedBy: null,
@@ -171,44 +181,43 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
         },
         ...(prev?.issuance || []),
       ],
-    }), "Issued Rolls to Manager", `${parsedQty} rolls issued to Manager`);
+    }), "Issued Rolls to Manager", `${parsedQty} rolls issued to Manager (${calculatedWeightKg} kg)`);
 
     setRollName("");
     setQty("");
-    setWeightKg("");
     showToast("Rolls Issued! Pending Manager Confirmation.");
   };
 
   return (
     <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] max-w-lg space-y-4">
       <p className="font-bold text-[#0B3B45]">Issue Film Rolls to Manager</p>
+      <div className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-lg border border-gray-200">
+        Registered Stock Ratio: <strong className="text-[#0B3B45]">{avgKgPerRoll.toFixed(2)} kg/roll</strong> (Based on {totalIntakeQty} total registered rolls across {totalIntakeKg} kg)[span_2](start_span)[span_2](end_span)
+      </div>
       <form onSubmit={handleIssue} className="space-y-3">
         <div>
-          <label className="text-xs font-semibold text-gray-500">Roll Name / Description (Optional)</label>
+          <label className="text-xs font-semibold text-gray-500">Roll Name / Description (Any Name Allowed)</label>
           <input
             type="text"
             value={rollName}
             onChange={(e) => setRollName(e.target.value)}
-            placeholder="e.g. Standard 25kg Film or Batch A"
+            placeholder="e.g. Special Batch A, Clear Film, etc."
             className="inp"
           />
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-xs font-semibold text-gray-500">Number of Rolls</label>
+            <label className="text-xs font-semibold text-gray-500">Number of Rolls to Issue</label>
             <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="5" className="inp" required />
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-500">Total Weight (kg)</label>
+            <label className="text-xs font-semibold text-gray-500">Calculated Weight (kg)</label>
             <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={weightKg}
-              onChange={(e) => setWeightKg(e.target.value)}
-              placeholder="125"
-              className="inp"
-              required
+              type="text"
+              value={parsedQty > 0 ? `${calculatedWeightKg} kg` : ""}
+              placeholder="Auto-calculated"
+              className="inp bg-gray-50 font-mono font-bold"
+              disabled
             />
           </div>
         </div>
