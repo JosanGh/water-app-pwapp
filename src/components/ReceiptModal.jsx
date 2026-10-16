@@ -50,7 +50,7 @@ export function ReceiptModal({ sale, companyName, driversList = [], onClose }) {
           <div className="border-b border-dashed border-gray-300 pb-3">
             <div className="flex justify-center items-center gap-1 text-[#0B3B45] font-bold text-base">
               <Droplets size={18} />
-              <span>{companyName || "Mattbees Water Services"}</span>
+              <span>{companyName || "Company"}</span>
             </div>
             <p className="text-[10px] text-gray-500 uppercase mt-0.5">Sachet Water Purchase Receipt</p>
             {receiptId && <p className="text-[9px] text-gray-400">Ref ID: #{receiptId}</p>}
@@ -109,7 +109,7 @@ export function ReceiptModal({ sale, companyName, driversList = [], onClose }) {
 
           <div className="border-t border-dashed border-gray-300 pt-3 text-[10px] text-gray-500">
             <p>Thank you for your business!</p>
-            <p className="text-[9px] text-gray-400 mt-0.5">PureLedger ERP · Verified Offline Transaction</p>
+            <p className="text-[9px] text-gray-400 mt-0.5">{companyName || "Water Operations"} · Verified Offline Transaction</p>
           </div>
         </div>
 

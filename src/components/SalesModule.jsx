@@ -37,7 +37,7 @@ export function SalesModule({ data, mutate, session, showToast }) {
       return;
     }
 
-    const pricePerBag = data.settings.pricePerBag || 5.0;
+    const pricePerBag = data.settings.pricePerBag ?? 0;
     const totalAmount = Number(bagsSold || 0) * pricePerBag;
 
     const newSale = {
@@ -54,6 +54,7 @@ export function SalesModule({ data, mutate, session, showToast }) {
       amountPaid: totalAmount,
       method: paymentMethod,
       recordedBy: session.name,
+      recordedByUserId: session.id,
     };
 
     mutate((prev) => ({
@@ -89,6 +90,8 @@ export function SalesModule({ data, mutate, session, showToast }) {
           amount: depVal,
           bankName,
           recordedBy: session.name,
+          depositedBy: session.name,
+          depositedByUserId: session.id,
         },
         ...(prev.bankDeposits || []),
       ],

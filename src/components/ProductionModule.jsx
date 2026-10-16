@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { AlertTriangle, Plus, X, Calendar, Layers, Archive } from "lucide-react";
+import { AlertTriangle, Plus, X, Calendar, Archive } from "lucide-react";
 import { uid, todayISO, computeManagerAcceptedRolls, computeManagerAcceptedBags } from '../lib/helpers';
 
 export function ProductionModule({ data = {}, mutate, session = {}, showToast }) {
@@ -8,13 +8,7 @@ export function ProductionModule({ data = {}, mutate, session = {}, showToast })
   const managerRolls = useMemo(() => computeManagerAcceptedRolls(data), [data]);
   const managerBags = useMemo(() => computeManagerAcceptedBags(data), [data]);
 
-  // Default fallback machines list if none registered in database
-  const defaultMachines = [
-    "Machine 1 - Koyo Cutting Line",
-    "Machine 2 - High Speed Sachet Line",
-    "Machine 3 - Secondary Line"
-  ];
-  const machinesList = data.machines || defaultMachines;
+  const machinesList = useMemo(() => data.machines || [], [data.machines]);
 
   const [operatorName, setOperatorName] = useState("");
   const [machineUnit, setMachineUnit] = useState(machinesList[0] || "");
@@ -129,6 +123,7 @@ export function ProductionModule({ data = {}, mutate, session = {}, showToast })
           freeBags: Number(freeBags || 0),
           netAvailableBags: netProduced,
           recordedBy: session.name,
+          recordedByUserId: session.id,
           isInitialBalance: false,
         },
         ...(prev.productionRuns || []),
@@ -140,6 +135,7 @@ export function ProductionModule({ data = {}, mutate, session = {}, showToast })
           qty: Number(bagsUsedQty),
           reason: `Production Run - ${machineUnit} (${operatorName})`,
           usedBy: session.name,
+          recordedByUserId: session.id,
         },
         ...(prev.bagUsage || []),
       ],
@@ -180,6 +176,7 @@ export function ProductionModule({ data = {}, mutate, session = {}, showToast })
           freeBags: freeNum,
           netAvailableBags: netProduced,
           recordedBy: session.name,
+          recordedByUserId: session.id,
           isInitialBalance: true,
           notes: openingNotes.trim() || "Initial stock balance recorded prior to software usage",
         },

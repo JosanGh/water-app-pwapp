@@ -16,19 +16,15 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
       },
       manifest: {
-        name: 'PureLedger - Sachet Water ERP (Ghana)',
-        short_name: 'PureLedger',
-        description: 'Fully offline capable PWA built with Vite',
-        theme_color: '#ffffff',
+        name: 'MattBees Water App',
+        short_name: 'MattBees Water',
+        description: 'Offline-ready company water operations application',
+        background_color: '#0B3B45',
+        theme_color: '#0B3B45',
         icons: [
-          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' }
+          { src: 'mattbees-water-app.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }
         ]
       }
     })
-  ],
-  server: {
-    port: 3000,
-    host: true,
-  }
+  ]
 });

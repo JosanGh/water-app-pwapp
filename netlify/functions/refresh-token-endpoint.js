@@ -1,7 +1,7 @@
 // netlify/functions/refresh-token-endpoint.js
 const jwt = require('jsonwebtoken');
 
-exports.handler = async (event, context) => {
+exports.handler = async (event, _context) => {
   // 1. Enforce strict POST request rules
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };

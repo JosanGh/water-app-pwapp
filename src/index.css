@@ -135,3 +135,27 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-light);
 }
+
+.auth-screen {
+  color-scheme: light;
+}
+
+.auth-screen input.inp {
+  background-color: #ffffff;
+  color: #16211f;
+  border-color: #cbd5d1;
+  color-scheme: light;
+}
+
+.auth-screen input.inp::placeholder {
+  color: #64716e;
+  opacity: 1;
+}
+
+.auth-screen input.inp:-webkit-autofill,
+.auth-screen input.inp:-webkit-autofill:hover,
+.auth-screen input.inp:-webkit-autofill:focus {
+  -webkit-text-fill-color: #16211f;
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset;
+  caret-color: #16211f;
+}

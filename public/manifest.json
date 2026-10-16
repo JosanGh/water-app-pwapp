@@ -1,19 +1,13 @@
 {
   "id": "/",
-  "short_name": "PureLedger",
-  "name": "PureLedger - Sachet Water ERP (Ghana)",
-  "description": "Enterprise Resource Planning for Sachet Water Production and Distribution",
+  "short_name": "MattBees Water",
+  "name": "MattBees Water App",
+  "description": "Offline-ready company water operations application",
   "icons": [
     {
-      "src": "icon-192.png",
-      "type": "image/png",
-      "sizes": "192x192",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "icon-512.png",
-      "type": "image/png",
-      "sizes": "512x512",
+      "src": "mattbees-water-app.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
       "purpose": "any maskable"
     }
   ],

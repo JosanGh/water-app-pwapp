@@ -26,7 +26,7 @@ export function BusinessDetailsModal({ initialDetails, onSave, onSkip }) {
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="text-xs font-semibold text-gray-500">Business / Company Name *</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Mattbees Water Services" className="inp mt-1" required />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Enter your company name" className="inp mt-1" required />
           </div>
 
           <div>

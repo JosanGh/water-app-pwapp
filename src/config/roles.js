@@ -11,7 +11,7 @@ export const rolesConfig = {
     label: "Business Owner",
     badgeColor: "bg-purple-100 text-purple-800 border-purple-200",
     accentColor: "#0B3B45",
-    allowedPages: ["dashboard", "warehouse", "production", "sales", "reports", "admin", "audit"],
+    allowedPages: ["dashboard", "warehouse", "production", "sales", "reports", "admin", "audit", "terms"],
     defaultLandingPage: "dashboard",
   },
   [ROLES.MANAGER]: {
@@ -19,7 +19,7 @@ export const rolesConfig = {
     label: "Plant Manager",
     badgeColor: "bg-blue-100 text-blue-800 border-blue-200",
     accentColor: "#1C8C9E",
-    allowedPages: ["dashboard", "warehouse", "production", "sales", "reports"],
+    allowedPages: ["dashboard", "warehouse", "production", "sales", "reports", "terms"],
     defaultLandingPage: "dashboard",
   },
   [ROLES.CASHIER]: {
@@ -27,7 +27,7 @@ export const rolesConfig = {
     label: "Sales Cashier",
     badgeColor: "bg-emerald-100 text-emerald-800 border-emerald-200",
     accentColor: "#2A6E4A",
-    allowedPages: ["sales"],
+    allowedPages: ["sales", "terms"],
     defaultLandingPage: "sales",
   },
   [ROLES.DRIVER]: {
@@ -35,7 +35,7 @@ export const rolesConfig = {
     label: "Delivery Driver",
     badgeColor: "bg-amber-100 text-amber-800 border-amber-200",
     accentColor: "#E8A23D",
-    allowedPages: ["reports"],
+    allowedPages: ["reports", "terms"],
     defaultLandingPage: "reports",
   },
 };

@@ -83,6 +83,8 @@ out/
 # Database dumps & SQL exports
 dumps/
 *.sql
+!supabase-migrate-safe.sql
+!supabase-tenant-records.sql
 *.sql.gz
 *.tar.gz
 

@@ -1,222 +1,463 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from "react";
 import { Droplets, Mail } from "lucide-react";
-import { TermsAndPolicy } from './TermsAndPolicy';
+import { getSupabaseStatus } from "../lib/supabaseClient";
+import { isValidOfflinePin } from "../lib/storage";
+import { TermsAndPolicy } from "./TermsAndPolicy";
 
-export function LoginScreen({ users = [], rolesConfig = {}, onLogin, onResetAdminPassword }) {
+export function LoginScreen({
+  error = "",
+  workspaceRequired = false,
+  passwordRecovery = false,
+  companyName = "",
+  onLogin,
+  onSignUp,
+  onResetPassword,
+  onCreateOrganization,
+  onJoinOrganization,
+  onUpdatePassword,
+  offlineAccessAvailable = false,
+  offlineRecoveryRequired = false,
+  offlineCompanyName = "",
+  onUnlockOffline,
+}) {
   const [view, setView] = useState("login");
-  const [selectedUser, setSelectedUser] = useState(users[0] || null);
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullNameInput, setFullNameInput] = useState("");
-  const [error, setError] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
+  const [offlinePin, setOfflinePin] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [newCompanyName, setNewCompanyName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [workspaceMode, setWorkspaceMode] = useState("create");
+  const [message, setMessage] = useState("");
+  const [formError, setFormError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const configured = getSupabaseStatus().configured;
 
-  const [resetFullNameInput, setResetFullNameInput] = useState("");
-  const [resetEmail, setResetEmail] = useState("");
-  const [resetPassword, setResetPassword] = useState("");
-
-  useEffect(() => {
-    if (users.length > 0 && !selectedUser) {
-      setSelectedUser(users[0]);
+  const run = async (action) => {
+    setBusy(true);
+    setFormError("");
+    setMessage("");
+    try {
+      await action();
+    } catch (err) {
+      setFormError(err.message || "The request could not be completed.");
+    } finally {
+      setBusy(false);
     }
-  }, [users, selectedUser]);
+  };
 
-  const handleLoginSubmit = (e) => {
-    e.preventDefault();
-    if (!selectedUser) return;
+  const handleLogin = (event) => {
+    event.preventDefault();
+    run(() => onLogin(email, password));
+  };
 
-    if (selectedUser.password && password !== selectedUser.password) {
-      setError("Incorrect password! Access denied.");
+  const handleSignUp = (event) => {
+    event.preventDefault();
+    if (password.length < 6) {
+      setFormError("Use a password with at least 6 characters.");
       return;
     }
-
-    if (!fullNameInput || fullNameInput.trim().toLowerCase() !== selectedUser.name.trim().toLowerCase()) {
-      setError("Full Name mismatch! Please type the exact full name assigned to this user.");
-      return;
-    }
-
-    onLogin({
-      id: selectedUser.id,
-      name: selectedUser.name,
-      role: selectedUser.role,
+    run(async () => {
+      const signedIn = await onSignUp(email, password);
+      setMessage(
+        signedIn
+          ? "Account created. Create your company workspace to continue."
+          : "Check your email to verify your account, then sign in.",
+      );
     });
   };
 
-  const handleForgot = (e) => {
-    e.preventDefault();
+  const handleReset = (event) => {
+    event.preventDefault();
+    run(async () => {
+      await onResetPassword(email);
+      setMessage("If the account exists, a password reset link has been sent.");
+    });
+  };
 
-    if (!resetFullNameInput.trim()) {
-      setError("Please enter the Admin full name.");
+  const handleUpdatePassword = (event) => {
+    event.preventDefault();
+    if (newPassword.length < 6) {
+      setFormError("Use a password with at least 6 characters.");
       return;
     }
-
-    if (resetPassword.length < 6) {
-      setError("New password must be at least 6 characters long.");
+    if (newPassword !== confirmPassword) {
+      setFormError("The passwords do not match.");
       return;
     }
+    run(() => onUpdatePassword(newPassword));
+  };
 
-    // Pass parameters in matching order: (fullName, email, newPassword)
-    const ok = onResetAdminPassword(resetFullNameInput, resetEmail, resetPassword);
-    
-    if (ok) {
-      setSuccessMsg("Admin password updated successfully! Please log in.");
-      setView("login");
-      setResetFullNameInput("");
-      setResetEmail("");
-      setResetPassword("");
-      setError("");
-    } else {
-      setError("No matching admin account found with provided credentials.");
-    }
+  const handleCreateOrganization = (event) => {
+    event.preventDefault();
+    run(() => onCreateOrganization(newCompanyName));
   };
 
   return (
-    <div className="min-h-screen bg-[#0B3B45] flex items-center justify-center p-6">
-      <div className={`relative w-full ${view === "terms" ? "max-w-3xl" : "max-w-md"} bg-[#F2F4EF] rounded-2xl p-6 shadow-2xl`}>
+    <div className="auth-screen min-h-screen bg-[#0B3B45] flex items-center justify-center p-6">
+      <div
+        className={`relative w-full ${view === "terms" ? "max-w-3xl" : "max-w-md"} bg-[#F2F4EF] rounded-2xl p-6 shadow-2xl`}
+      >
         <div className="flex items-center gap-2.5 justify-center mb-6">
           <div className="w-10 h-10 rounded-lg bg-[#1C8C9E] flex items-center justify-center">
             <Droplets size={20} className="text-[#0B3B45]" />
           </div>
           <div className="text-left">
-            <p className="font-display font-800 text-[#0B3B45] text-xl leading-none">Mattbees Water Services</p>
-            <p className="font-mono text-[10px] text-[#5B6B68] uppercase tracking-widest mt-0.5">Offline-First Sachet ERP</p>
+            <p className="font-display font-800 text-[#0B3B45] text-xl leading-none">
+              {companyName || "Company workspace"}
+            </p>
+            <p className="font-mono text-[10px] text-[#5B6B68] uppercase tracking-widest mt-0.5">
+              Business operations platform
+            </p>
           </div>
         </div>
 
         {view === "terms" ? (
-          <TermsAndPolicy onBack={() => setView("login")} />
-        ) : view === "login" && (
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
-            {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Select Account / User</label>
-              <select
-                value={selectedUser?.id || ""}
-                onChange={(e) => {
-                  const u = users.find((x) => x.id === e.target.value);
-                  setSelectedUser(u);
-                  setFullNameInput("");
-                  setError("");
-                }}
-                className="inp mt-1"
-              >
-                {users.map((u) => {
-                  const roleLabel = rolesConfig[u.role]?.label || u.role;
-                  return (
-                    <option key={u.id} value={u.id}>
-                      {roleLabel} — {u.name}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Verify Full Name</label>
-              <input
-                type="text"
-                value={fullNameInput}
-                onChange={(e) => { setFullNameInput(e.target.value); setError(""); }}
-                placeholder="Type exact full name assigned"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Password</label>
+          <TermsAndPolicy
+            companyName={companyName}
+            onBack={() => setView("login")}
+          />
+        ) : passwordRecovery ? (
+          <form onSubmit={handleUpdatePassword} className="space-y-4">
+            <h1 className="font-bold text-[#0B3B45] text-lg">
+              Choose a new password
+            </h1>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              New password
               <input
                 type="password"
-                value={password}
-                onChange={(e) => { setPassword(e.target.value); setError(""); }}
-                placeholder="••••••••"
+                autoComplete="new-password"
+                minLength={6}
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
                 className="inp mt-1"
                 required
               />
-            </div>
-
-            {error && <p className="text-xs font-semibold text-[#C4472F]">{error}</p>}
-
-            <button type="submit" className="btn-primary w-full py-2.5 mt-2">
-              Authenticate & Sign In
+            </label>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Confirm new password
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={6}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                className="inp mt-1"
+                required
+              />
+            </label>
+            {(error || formError) && (
+              <p className="text-xs font-semibold text-[#C4472F]">
+                {formError || error}
+              </p>
+            )}
+            <button
+              type="submit"
+              className="btn-primary w-full py-2.5"
+              disabled={busy}
+            >
+              {busy ? "Updating…" : "Update password"}
             </button>
-
+          </form>
+        ) : workspaceRequired && workspaceMode === "join" ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              run(() => onJoinOrganization(inviteCode, fullName));
+            }}
+            className="space-y-4"
+          >
+            <h1 className="font-bold text-[#0B3B45] text-lg">
+              Join a company workspace
+            </h1>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Your full name
+              <input
+                value={fullName}
+                onChange={(event) => setFullName(event.target.value)}
+                className="inp mt-1"
+                maxLength={160}
+                required
+              />
+            </label>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Company invite code
+              <input
+                value={inviteCode}
+                onChange={(event) => setInviteCode(event.target.value)}
+                className="inp mt-1"
+                required
+              />
+            </label>
+            {(error || formError) && (
+              <p className="text-xs font-semibold text-[#C4472F]">
+                {formError || error}
+              </p>
+            )}
+            <button
+              type="submit"
+              className="btn-primary w-full py-2.5"
+              disabled={busy || !configured}
+            >
+              {busy ? "Joining…" : "Join company"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkspaceMode("create")}
+              className="w-full text-xs text-[#0B3B45] hover:underline"
+            >
+              Create a new company instead
+            </button>
+          </form>
+        ) : workspaceRequired ? (
+          <form onSubmit={handleCreateOrganization} className="space-y-4">
+            <h1 className="font-bold text-[#0B3B45] text-lg">
+              Create your company workspace
+            </h1>
+            <p className="text-sm text-[#5B6B68]">
+              This creates an isolated tenant. Your records are not copied from
+              legacy data automatically.
+            </p>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Company name
+              <input
+                value={newCompanyName}
+                onChange={(event) => setNewCompanyName(event.target.value)}
+                className="inp mt-1"
+                maxLength={160}
+                required
+              />
+            </label>
+            {(error || formError) && (
+              <p className="text-xs font-semibold text-[#C4472F]">
+                {formError || error}
+              </p>
+            )}
+            {message && (
+              <p className="text-xs font-semibold text-green-700">{message}</p>
+            )}
+            <button
+              type="submit"
+              className="btn-primary w-full py-2.5"
+              disabled={busy || !configured}
+            >
+              {busy ? "Creating…" : "Create company"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkspaceMode("join")}
+              className="w-full text-xs text-[#0B3B45] hover:underline"
+            >
+              Join an existing company with an invite code
+            </button>
+          </form>
+        ) : view === "reset" ? (
+          <form onSubmit={handleReset} className="space-y-4">
+            <h1 className="font-bold text-[#0B3B45] text-lg">
+              Reset password
+            </h1>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Account email
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="inp mt-1"
+                required
+              />
+            </label>
+            {(error || formError) && (
+              <p className="text-xs font-semibold text-[#C4472F]">
+                {formError || error}
+              </p>
+            )}
+            {message && (
+              <p className="text-xs font-semibold text-green-700">{message}</p>
+            )}
+            <button
+              type="submit"
+              className="btn-primary w-full py-2.5"
+              disabled={busy || !configured}
+            >
+              {busy ? "Sending…" : "Send secure reset link"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("login")}
+              className="w-full text-xs text-[#0B3B45] hover:underline"
+            >
+              Back to sign in
+            </button>
+          </form>
+        ) : (
+          <form
+            onSubmit={view === "signup" ? handleSignUp : handleLogin}
+            className="space-y-4"
+          >
+            {!configured && (
+              <p className="text-xs font-semibold text-[#C4472F]">
+                Cloud authentication is not configured. Sign-in is disabled.
+              </p>
+            )}
+            {message && (
+              <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">
+                {message}
+              </p>
+            )}
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Email
+              <input
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="inp mt-1"
+                required
+              />
+            </label>
+            <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+              Password
+              <input
+                type="password"
+                autoComplete={
+                  view === "signup" ? "new-password" : "current-password"
+                }
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="inp mt-1"
+                minLength={view === "signup" ? 6 : undefined}
+                required
+              />
+            </label>
+            {(error || formError) && (
+              <p className="text-xs font-semibold text-[#C4472F]">
+                {formError || error}
+              </p>
+            )}
+            <button
+              type="submit"
+              className="btn-primary w-full py-2.5"
+              disabled={busy || !configured}
+            >
+              {busy
+                ? "Please wait…"
+                : view === "signup"
+                  ? "Create verified account"
+                  : "Sign in"}
+            </button>
             <div className="pt-3 border-t border-[#DDE3DA] flex flex-col gap-2 text-center">
+              {view === "login" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView("reset");
+                      setMessage("");
+                      setFormError("");
+                    }}
+                    className="text-xs text-gray-600 hover:underline flex items-center justify-center gap-1"
+                  >
+                    <Mail size={13} /> Send password reset email
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView("signup");
+                      setMessage("");
+                      setFormError("");
+                    }}
+                    className="text-xs text-[#0B3B45] hover:underline"
+                  >
+                    Create a new company account
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setView("login");
+                    setMessage("");
+                    setFormError("");
+                  }}
+                  className="text-xs text-[#0B3B45] hover:underline"
+                >
+                  Already registered? Sign in
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => { setView("forgot"); setError(""); setSuccessMsg(""); }}
-                className="text-xs text-gray-600 hover:underline flex items-center justify-center gap-1"
+                onClick={() => setView("terms")}
+                className="text-xs text-[#0B3B45] hover:underline"
               >
-                <Mail size={13} /> Admin Password Reset (Email Auth)
-              </button>
-              <button type="button" onClick={() => setView("terms")} className="text-xs text-[#0B3B45] hover:underline">
                 Read Terms & Policy
               </button>
             </div>
           </form>
         )}
-
-        {view === "forgot" && (
-          <form onSubmit={handleForgot} className="space-y-3">
-            {successMsg && <p className="text-xs font-semibold text-green-700 bg-green-100 p-2 rounded">{successMsg}</p>}
-            <div className="bg-[#EAF3F1] p-3 rounded-lg border border-[#BFDCD6] mb-2">
-              <p className="text-xs font-bold text-[#0B3B45]">Admin Password Recovery</p>
-              <p className="text-[11px] text-[#5B6B68]">Authenticate using registered Admin email address to set a new password.</p>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Admin Full Name</label>
-              <input
-                type="text"
-                value={resetFullNameInput}
-                onChange={(e) => { setResetFullNameInput(e.target.value); setError(""); }}
-                placeholder="Enter registered full name"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">Admin Email</label>
-              <input
-                type="email"
-                value={resetEmail}
-                onChange={(e) => { setResetEmail(e.target.value); setError(""); }}
-                placeholder="Enter your email"
-                className="inp mt-1"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B68] uppercase">New Secure Password</label>
+        {(offlineAccessAvailable || offlineRecoveryRequired) &&
+          !passwordRecovery && (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (
+                !isValidOfflinePin(offlinePin) &&
+                !/^\d{8,12}$/.test(offlinePin)
+              ) {
+                setFormError("Enter your 6-character device PIN.");
+                return;
+              }
+              run(() => onUnlockOffline(offlinePin));
+            }}
+            className="mt-6 space-y-3 border-t border-[#DDE3DA] pt-4"
+          >
+            <h2 className="text-sm font-bold text-[#0B3B45]">
+              {offlineRecoveryRequired
+                ? "Restore pending offline changes"
+                : `Offline access${offlineCompanyName ? ` · ${offlineCompanyName}` : ""}`}
+            </h2>
+            <p className="text-xs text-[#5B6B68]">
+              {offlineRecoveryRequired
+                ? "Unlock the encrypted data saved while offline. The app will attempt a revision-checked sync and preserve the local copy if the cloud has changed."
+                : "Unlock this device’s encrypted company data. New PINs are 6 characters; previously configured 8–12 digit PINs still work. Changes stay on this device until you sign in online."}
+            </p>
+            <label className="block text-xs font-semibold uppercase text-[#5B6B68]">
+              Device PIN
               <input
                 type="password"
-                value={resetPassword}
-                onChange={(e) => { setResetPassword(e.target.value); setError(""); }}
-                placeholder="Set new password"
+                inputMode="text"
+                autoComplete="current-password"
+                minLength={6}
+                maxLength={12}
+                pattern="(?:[A-Za-z0-9]{6}|[0-9]{8,12})"
+                value={offlinePin}
+                onChange={(event) =>
+                  setOfflinePin(event.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 12))
+                }
                 className="inp mt-1"
                 required
               />
-            </div>
-
-            {error && <p className="text-xs font-semibold text-[#C4472F]">{error}</p>}
-
-            <button type="submit" className="btn-primary w-full py-2.5 mt-2">
-              Authenticate Email & Reset Password
-            </button>
-
+            </label>
+            {(error || formError) && (
+              <p role="alert" className="text-xs font-semibold text-[#C4472F]">
+                {formError || error}
+              </p>
+            )}
             <button
-              type="button"
-              onClick={() => { setView("login"); setError(""); }}
-              className="w-full text-center text-xs text-gray-500 hover:underline mt-2"
+              type="submit"
+              className="btn-primary w-full py-2.5"
+              disabled={busy}
             >
-              Back to Login
+              {busy
+                ? "Unlocking…"
+                : offlineRecoveryRequired
+                  ? "Restore offline changes"
+                  : "Unlock offline workspace"}
             </button>
           </form>
-        )}
-
-        <p className="text-center text-[11px] font-mono text-[#5B6B68] mt-4">PWA ACTIVE · SUPABASE SYNC ENABLED</p>
+          )}
       </div>
     </div>
   );
