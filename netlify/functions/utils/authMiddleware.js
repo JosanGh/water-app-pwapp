@@ -1,5 +1,5 @@
 // netlify/functions/utils/authMiddleware.js
-const jwt = require('jsonwebtoken');
+import jwt from 'jsonwebtoken';
 
 const withAuth = (handler) => {
   return async (event, context) => {
@@ -43,4 +43,4 @@ const withAuth = (handler) => {
   };
 };
 
-module.exports = withAuth;
+export default withAuth;
