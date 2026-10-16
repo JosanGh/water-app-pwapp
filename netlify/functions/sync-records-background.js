@@ -1,5 +1,5 @@
 // netlify/functions/sync-records-background.js
-const withAuth = require("./utils/authMiddleware");
+import withAuth from "./utils/authMiddleware.js";
 
 const syncHandler = async (event, context) => {
   try {
@@ -25,4 +25,4 @@ const syncHandler = async (event, context) => {
 };
 
 // Export the wrapped handler
-exports.handler = withAuth(syncHandler);
+export const handler = withAuth(syncHandler);
