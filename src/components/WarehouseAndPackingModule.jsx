@@ -126,19 +126,21 @@ export function WarehouseModule({
 /*  ROLL SUB-COMPONENTS                                                   */
 /* ---------------------------------------------------------------------- */
 function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
-  const [totalKg, setTotalKg] = useState("");
-  const [qty, setQty] = useState("");
+  const [selectedTypeId, setSelectedTypeId] = useState("new");
+  const [rollTypeName, setRollTypeName] = useState("");
+  const [kgPerRoll, setKgPerRoll] = useState("");
   const [supplier, setSupplier] = useState("");
+  const [qty, setQty] = useState("");
 
-  const handleIntake = (e) => {
+  const handleCreateTypeAndIntake = (e) => {
     e.preventDefault();
     const parsedQty = Number(qty) || 0;
-    const parsedKg = Number(totalKg) || 0;
+    if (parsedQty <= 0) return showToast("Quantity must be positive!", "warn");
 
-    if (parsedQty <= 0) return showToast("Quantity of rolls must be positive!", "warn");
-    if (parsedKg <= 0) return showToast("Total weight in kg must be positive!", "warn");
+    let typeId = selectedTypeId;
+    let typeName = rollTypeName;
+    let weightPerRoll = Number(kgPerRoll) || 0;
 
-<<<<<<< HEAD
     if (selectedTypeId === "new") {
       if (!rollTypeName.trim() || weightPerRoll <= 0) {
         return showToast(
@@ -210,34 +212,11 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
     setSupplier("");
     setQty("");
     setSelectedTypeId("new");
-=======
-    const calculatedKgPerRoll = parsedKg / parsedQty;
-
-    mutate((prev) => ({
-      ...prev,
-      intake: [
-        {
-          id: uid(),
-          date: todayISO(),
-          supplier,
-          qty: parsedQty,
-          weightKg: parsedKg,
-          kgPerRoll: calculatedKgPerRoll
-        },
-        ...(prev?.intake || []),
-      ],
-    }), "Recorded Roll Intake", `${parsedQty} rolls (${parsedKg} kg)`);
-
-    setTotalKg("");
-    setQty("");
-    setSupplier("");
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
     showToast("Roll Intake Recorded!");
   };
 
   return (
     <div className="grid lg:grid-cols-2 gap-4">
-<<<<<<< HEAD
       <form
         onSubmit={handleCreateTypeAndIntake}
         className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3"
@@ -290,30 +269,17 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
             <label className="text-xs font-semibold text-gray-500">
               Weight per Roll (kg)
             </label>
-=======
-      <form onSubmit={handleIntake} className="bg-white p-5 rounded-2xl border border-[#DDE3DA] space-y-3">
-        <p className="font-bold text-[#0B3B45]">Owner Raw Roll Intake (Kg & Count Only)</p>
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Number of Rolls (Roll Count)</label>
-            <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="10" className="inp" required />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Total Weight (kg)</label>
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
             <input
               type="number"
               min="0.1"
               step="0.1"
-              value={totalKg}
-              onChange={(e) => setTotalKg(e.target.value)}
-              placeholder="250"
+              value={kgPerRoll}
+              onChange={(e) => setKgPerRoll(e.target.value)}
+              placeholder="25"
               className="inp"
-              required
+              disabled={selectedTypeId !== "new"}
             />
           </div>
-<<<<<<< HEAD
           <div>
             <label className="text-xs font-semibold text-gray-500">
               Quantity Rolls (Roll Count)
@@ -328,8 +294,6 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
               required
             />
           </div>
-=======
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
         </div>
 
         <div>
@@ -356,14 +320,13 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
+              <th className="p-2">Roll Type</th>
               <th className="p-2">Supplier</th>
               <th className="p-2 text-right">Roll Count</th>
-              <th className="p-2 text-right">Total Weight (kg)</th>
-              <th className="p-2 text-right">Kg / Roll</th>
+              <th className="p-2 text-right">Weight (kg)</th>
             </tr>
           </thead>
           <tbody>
-<<<<<<< HEAD
             {(data?.intake || []).map((r) => (
               <tr key={r.id} className="border-t">
                 <td className="p-2 font-mono">{r.date}</td>
@@ -386,22 +349,6 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
                 <td className="p-2 text-right font-mono">{r.weightKg} kg</td>
               </tr>
             ))}
-=======
-            {(data?.intake || []).map((r) => {
-              const rollCount = Number(r.qty) || 0;
-              const totalWeight = Number(r.weightKg) || 0;
-              const unitKg = rollCount > 0 ? totalWeight / rollCount : (Number(r.kgPerRoll) || 0);
-              return (
-                <tr key={r.id} className="border-t">
-                  <td className="p-2 font-mono">{r.date}</td>
-                  <td className="p-2 text-blue-800 font-semibold">{r.supplier || "N/A"}</td>
-                  <td className="p-2 text-right font-mono font-bold">{rollCount} rolls</td>
-                  <td className="p-2 text-right font-mono">{totalWeight} kg</td>
-                  <td className="p-2 text-right font-mono text-gray-500">{unitKg.toFixed(2)} kg/roll</td>
-                </tr>
-              );
-            })}
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
           </tbody>
         </table>
       </div>
@@ -410,32 +357,19 @@ function OwnerRollIntakeTab({ data = {}, mutate, showToast }) {
 }
 
 function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
-<<<<<<< HEAD
   const [rollTypeId, setRollTypeId] = useState(
     (data?.rollTypes || [])[0]?.id || "",
   );
-=======
-  const [rollName, setRollName] = useState("");
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
   const [qty, setQty] = useState("");
 
-  // Calculate average kg per roll from registered intake stock ratio
-  const totalIntakeQty = useMemo(() => {
-    return (data?.intake || []).reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
-  }, [data?.intake]);
-
-  const totalIntakeKg = useMemo(() => {
-    return (data?.intake || []).reduce((sum, r) => sum + (Number(r.weightKg) || 0), 0);
-  }, [data?.intake]);
-
-  const avgKgPerRoll = totalIntakeQty > 0 ? totalIntakeKg / totalIntakeQty : 0;
-
-  const parsedQty = Number(qty) || 0;
-  const calculatedWeightKg = Number((parsedQty * avgKgPerRoll).toFixed(2));
+  useEffect(() => {
+    if ((data?.rollTypes || []).length > 0 && !rollTypeId) {
+      setRollTypeId(data.rollTypes[0].id);
+    }
+  }, [data?.rollTypes, rollTypeId]);
 
   const handleIssue = (e) => {
     e.preventDefault();
-<<<<<<< HEAD
     const parsedQty = Number(qty) || 0;
     if (parsedQty <= 0)
       return showToast("Enter a positive quantity of rolls!", "warn");
@@ -468,31 +402,7 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
       "Issued Rolls to Manager",
       `${parsedQty} rolls issued to Manager`,
     );
-=======
-    if (parsedQty <= 0) return showToast("Enter a positive quantity of rolls!", "warn");
-    if (totalIntakeQty <= 0) return showToast("No registered roll intake found to calculate weight from!", "warn");
 
-    mutate((prev) => ({
-      ...prev,
-      issuance: [
-        {
-          id: uid(),
-          date: todayISO(),
-          rollName: rollName.trim() || "General Film Roll",
-          qty: parsedQty,
-          rollsCount: parsedQty,
-          weightKg: calculatedWeightKg,
-          status: "PENDING",
-          issuedBy: session?.name || "Admin",
-          confirmedBy: null,
-          physicalCount: null,
-        },
-        ...(prev?.issuance || []),
-      ],
-    }), "Issued Rolls to Manager", `${parsedQty} rolls issued to Manager (${calculatedWeightKg} kg)`);
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
-
-    setRollName("");
     setQty("");
     showToast("Rolls Issued! Pending Manager Confirmation.");
   };
@@ -500,12 +410,8 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
   return (
     <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] max-w-lg space-y-4">
       <p className="font-bold text-[#0B3B45]">Issue Film Rolls to Manager</p>
-      <div className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-lg border border-gray-200">
-        Registered Stock Ratio: <strong className="text-[#0B3B45]">{avgKgPerRoll.toFixed(2)} kg/roll</strong> (Based on {totalIntakeQty} total registered rolls across {totalIntakeKg} kg)[span_2](start_span)[span_2](end_span)
-      </div>
       <form onSubmit={handleIssue} className="space-y-3">
         <div>
-<<<<<<< HEAD
           <label className="text-xs font-semibold text-gray-500">
             Select Roll Type
           </label>
@@ -535,32 +441,6 @@ function IssueRollsTab({ data = {}, mutate, session = {}, showToast }) {
             className="inp"
             required
           />
-=======
-          <label className="text-xs font-semibold text-gray-500">Roll Name / Description (Any Name Allowed)</label>
-          <input
-            type="text"
-            value={rollName}
-            onChange={(e) => setRollName(e.target.value)}
-            placeholder="e.g. Special Batch A, Clear Film, etc."
-            className="inp"
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Number of Rolls to Issue</label>
-            <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="5" className="inp" required />
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-gray-500">Calculated Weight (kg)</label>
-            <input
-              type="text"
-              value={parsedQty > 0 ? `${calculatedWeightKg} kg` : ""}
-              placeholder="Auto-calculated"
-              className="inp bg-gray-50 font-mono font-bold"
-              disabled
-            />
-          </div>
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
         </div>
         <button type="submit" className="btn-primary w-full">
           Transfer Rolls to Production Floor
@@ -581,9 +461,8 @@ function ManagerRollAcceptanceTab({
     [data],
   );
 
-  const handleAccept = (issuanceId, physicalRollsCountInput, verifiedWeightKgInput) => {
+  const handleAccept = (issuanceId, physicalRollsCountInput) => {
     const parsedCount = Number(physicalRollsCountInput) || 0;
-<<<<<<< HEAD
     if (parsedCount <= 0)
       return showToast("Enter a valid physical roll count!", "warn");
 
@@ -620,35 +499,6 @@ function ManagerRollAcceptanceTab({
           title: "Manager Roll Count Acceptance",
           msg: `Manager ${session?.name || "Manager"} accepted ${parsedCount} rolls (${weightKgCalculated} kg) for transfer ID #${issuanceId.slice(0, 5)}`,
         };
-=======
-    const parsedWeight = Number(verifiedWeightKgInput) || 0;
-
-    if (parsedCount <= 0) return showToast("Enter a valid physical roll count!", "warn");
-    if (parsedWeight <= 0) return showToast("Enter a valid total weight in kg!", "warn");
-
-    mutate((prev) => {
-      const nextIssuance = (prev?.issuance || []).map((item) =>
-        item.id === issuanceId
-          ? {
-              ...item,
-              status: "ACCEPTED",
-              accepted: true,
-              confirmedBy: session?.name || "Manager",
-              physicalCount: parsedCount,
-              rollsCount: parsedCount,
-              weightKg: parsedWeight
-            }
-          : item
-      );
-
-      const notif = {
-        id: uid(),
-        ts: new Date().toLocaleTimeString(),
-        read: false,
-        title: "Manager Roll Count Acceptance",
-        msg: `Manager ${session?.name || "Manager"} accepted ${parsedCount} rolls (${parsedWeight} kg) for transfer ID #${issuanceId.slice(0,5)}`,
-      };
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
 
         return {
           ...prev,
@@ -667,17 +517,12 @@ function ManagerRollAcceptanceTab({
     <div className="space-y-4">
       <div className="bg-white p-4 rounded-xl border border-[#DDE3DA] flex justify-between items-center">
         <div>
-<<<<<<< HEAD
           <p className="font-bold text-sm text-[#0B3B45]">
             Manager Accepted Rolls Balance
           </p>
           <p className="text-xs text-gray-500">
             Recorded as physical number of rolls received.
           </p>
-=======
-          <p className="font-bold text-sm text-[#0B3B45]">Manager Accepted Rolls Balance</p>
-          <p className="text-xs text-gray-500">Recorded as physical number of rolls received and weight.</p>
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
         </div>
         <div className="text-right">
           <p className="text-2xl font-mono font-bold text-[#1C8C9E]">
@@ -690,27 +535,22 @@ function ManagerRollAcceptanceTab({
       </div>
 
       <div className="bg-white p-5 rounded-2xl border border-[#DDE3DA] overflow-x-auto">
-<<<<<<< HEAD
         <p className="font-bold text-[#0B3B45] mb-3">
           Roll Custody Transfers & Number of Rolls Acceptance
         </p>
-=======
-        <p className="font-bold text-[#0B3B45] mb-3">Roll Custody Transfers & Acceptance</p>
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#F7F8F5] text-left">
               <th className="p-2">Date</th>
-              <th className="p-2">Roll Name</th>
+              <th className="p-2">Roll Type</th>
               <th className="p-2 text-right">Issued Rolls</th>
-              <th className="p-2 text-right">Weight (kg)</th>
+              <th className="p-2 text-right">Estimated Weight</th>
               <th className="p-2">Status</th>
-              <th className="p-2">Physical Count, Weight & Confirm</th>
+              <th className="p-2">Physical Rolls Received & Confirm</th>
             </tr>
           </thead>
           <tbody>
             {(data?.issuance || []).map((item) => {
-<<<<<<< HEAD
               const rType = (data?.rollTypes || []).find(
                 (t) => t.id === item.rollTypeId,
               );
@@ -728,14 +568,6 @@ function ManagerRollAcceptanceTab({
                   <td className="p-2 text-right font-mono">
                     {item.weightKg} kg
                   </td>
-=======
-              return (
-                <tr key={item.id} className="border-t">
-                  <td className="p-2 font-mono">{item.date}</td>
-                  <td className="p-2 font-semibold">{item.rollName || "Film Roll"}</td>
-                  <td className="p-2 text-right font-mono font-bold">{item.qty ?? item.rollsCount} rolls</td>
-                  <td className="p-2 text-right font-mono">{item.weightKg} kg</td>
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
                   <td className="p-2">
                     <span
                       className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.status === "ACCEPTED" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}
@@ -745,7 +577,6 @@ function ManagerRollAcceptanceTab({
                   </td>
                   <td className="p-2">
                     {item.status === "PENDING" ? (
-<<<<<<< HEAD
                       <AcceptForm
                         session={session}
                         label="Rolls Received"
@@ -756,11 +587,6 @@ function ManagerRollAcceptanceTab({
                         Confirmed: <strong>{item.physicalCount} rolls</strong>{" "}
                         by {item.confirmedBy}
                       </span>
-=======
-                      <AcceptRollForm session={session} defaultWeight={item.weightKg} onAccept={(count, weight) => handleAccept(item.id, count, weight)} />
-                    ) : (
-                      <span className="text-gray-600 font-mono">Confirmed: <strong>{item.physicalCount} rolls</strong> ({item.weightKg} kg) by {item.confirmedBy}</span>
->>>>>>> 1f519e1e8980f70831a0a6df8c0e1445ba19c0c9
                     )}
                   </td>
                 </tr>
@@ -1144,49 +970,6 @@ function ManagerBagAcceptanceTab({
           </tbody>
         </table>
       </div>
-    </div>
-  );
-}
-
-function AcceptRollForm({ session = {}, defaultWeight = "", onAccept }) {
-  const isManager = session?.role === "manager" || session?.role === "owner";
-  const [cnt, setCnt] = useState("");
-  const [weight, setWeight] = useState(defaultWeight || "");
-
-  if (!isManager) return null;
-
-  return (
-    <div className="flex gap-1 items-center flex-wrap">
-      <input
-        type="number"
-        min="1"
-        value={cnt}
-        onChange={(e) => setCnt(e.target.value)}
-        placeholder="Rolls count"
-        className="inp py-1 text-xs w-24"
-        required
-      />
-      <input
-        type="number"
-        min="0.1"
-        step="0.1"
-        value={weight}
-        onChange={(e) => setWeight(e.target.value)}
-        placeholder="Weight kg"
-        className="inp py-1 text-xs w-24"
-        required
-      />
-      <button
-        type="button"
-        onClick={() => {
-          if (Number(cnt) > 0 && Number(weight) > 0) {
-            onAccept(cnt, weight);
-          }
-        }}
-        className="btn-success text-xs py-1 px-2"
-      >
-        Accept
-      </button>
     </div>
   );
 }
