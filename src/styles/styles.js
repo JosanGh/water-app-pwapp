@@ -24,6 +24,9 @@ export const CSS_TOOLKIT = `
   #printable-area, #printable-area *, #printable-receipt, #printable-receipt * { visibility: visible; }
   #printable-area { position: absolute; left: 0; top: 0; width: 100%; }
   #printable-receipt { position: absolute; left: 0; top: 0; width: 100%; max-width: 320px; margin: 0 auto; padding: 10px; background: white; color: black; }
+  body.printing-overall-report #printable-area.overall-report { position: absolute; left: 0; top: 0; width: 100%; padding: 0; background: #fff !important; color: #111 !important; }
+  body.printing-overall-report #printable-area.overall-report,
+  body.printing-overall-report #printable-area.overall-report * { visibility: visible !important; }
   .no-print { display: none !important; }
 }
 `;

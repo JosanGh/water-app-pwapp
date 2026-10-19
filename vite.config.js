@@ -11,9 +11,22 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: 'inline',
       workbox: {
-        // Automatically caches all HTML, JS, CSS, and asset files found in your dist folder
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        globPatterns: ['**/*.{css,html,ico,png,svg,woff2}'],
         cleanupOutdatedCaches: true,
+        runtimeCaching: [
+          {
+            urlPattern: ({ request }) => request.destination === 'script',
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'app-script-chunks',
+              cacheableResponse: { statuses: [0, 200] },
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 30 * 24 * 60 * 60,
+              },
+            },
+          },
+        ],
       },
       manifest: {
         name: 'MattBees Water App',

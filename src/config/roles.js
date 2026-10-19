@@ -11,7 +11,7 @@ export const rolesConfig = {
     label: "Business Owner",
     badgeColor: "bg-purple-100 text-purple-800 border-purple-200",
     accentColor: "#0B3B45",
-    allowedPages: ["dashboard", "warehouse", "production", "sales", "reports", "admin", "audit", "terms"],
+    allowedPages: ["dashboard", "warehouse", "production", "sales", "reports", "admin", "audit", "overall-report", "terms"],
     defaultLandingPage: "dashboard",
   },
   [ROLES.MANAGER]: {

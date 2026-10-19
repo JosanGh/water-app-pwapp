@@ -22,6 +22,13 @@ export function getSupabaseStatus() {
   };
 }
 
+export async function isPlatformSubscriptionAdmin() {
+  const client = requireClient();
+  const { data, error } = await client.rpc("is_platform_subscription_admin");
+  if (error) throw error;
+  return data === true;
+}
+
 function requireClient() {
   if (!supabase) {
     throw new Error("Cloud authentication is not configured for this deployment.");
@@ -139,25 +146,14 @@ export async function getOrganization(userId, productId = PRODUCTS.water.id) {
   }
   const { data: organization, error: organizationError } = await client
     .from("organizations")
-    .select("id, name")
+    .select(
+      "id, name, subscription_status, subscription_plan, expires_at, grace_until",
+    )
     .eq("id", membership.organization_id)
     .single();
 
   if (organizationError) throw organizationError;
-<<<<<<< HEAD
-  const { data: product, error: productError } = await client
-    .from("organization_products")
-    .select("product_id")
-    .eq("organization_id", organization.id)
-    .eq("product_id", "water")
-    .maybeSingle();
-  if (productError) throw productError;
-  if (!product) {
-    throw new Error("The water operations module is not enabled for this company.");
-  }
-=======
   const hasSubscriptionAccess = organizationHasSubscriptionAccess(organization);
->>>>>>> 82f9053 (Top)
   return {
     id: organization.id,
     name: organization.name,
@@ -165,12 +161,14 @@ export async function getOrganization(userId, productId = PRODUCTS.water.id) {
     userId,
     userName: membership.full_name,
     role: membership.role,
+    subscriptionStatus: organization.subscription_status,
+    subscriptionPlan: organization.subscription_plan,
+    expiresAt: organization.expires_at,
+    graceUntil: organization.grace_until,
+    hasSubscriptionAccess,
   };
 }
 
-<<<<<<< HEAD
-export async function createOrganization(name, userId) {
-=======
 export function organizationHasSubscriptionAccess(
   organization,
   now = Date.now(),
@@ -199,7 +197,6 @@ export async function createOrganization(
   userId,
   productId = PRODUCTS.water.id,
 ) {
->>>>>>> 82f9053 (Top)
   const client = requireClient();
   if (!getProduct(productId)) {
     throw new Error("Choose a supported workspace.");
@@ -268,6 +265,10 @@ const RECORD_COLLECTIONS = [
   "notifications",
   "machines",
 ];
+
+const MAX_TENANT_SYNC_CHANGES = 10000;
+const TENANT_SYNC_BATCH_SIZE = 1000;
+const MAX_TENANT_SYNC_PAYLOAD_BYTES = 7 * 1024 * 1024;
 
 const emptyRecordData = {
   businessDetails: {},
@@ -393,6 +394,7 @@ export async function fetchFromSupabase(organization) {
 
   const tenantData = { ...emptyRecordData };
   tenantData.machineRecordMetadata = {};
+  tenantData.tenantRecordBaselineVersion = 1;
   const users = [];
   let offset = 0;
   const pageSize = 1000;
@@ -481,6 +483,13 @@ export async function syncToSupabase(
       error: authError || new Error("A verified sign-in is required."),
     };
   }
+  if (authData.user.id !== organization.userId) {
+    return {
+      success: false,
+      reason: "tenant_session_mismatch",
+      error: new Error("The signed-in user does not match this company session."),
+    };
+  }
 
   if (!previousData) {
     return {
@@ -491,13 +500,43 @@ export async function syncToSupabase(
       ),
     };
   }
+  if (previousData.tenantRecordBaselineVersion !== 1) {
+    return {
+      success: false,
+      conflict: true,
+      reason: "legacy_baseline",
+      error: new Error(
+        "Local data was saved before tenant-record sync and has no safe record-level baseline.",
+      ),
+    };
+  }
   const changes = buildOrganizationRecordChanges(previousData, data, {
     isOwner: organization.role === "owner",
   });
   if (!changes.length) return { success: true, revision: 0 };
+  if (changes.length > MAX_TENANT_SYNC_CHANGES) {
+    return {
+      success: false,
+      reason: "sync_limit_exceeded",
+      error: new Error(
+        `This sync contains ${changes.length} changes; the limit is ${MAX_TENANT_SYNC_CHANGES}.`,
+      ),
+    };
+  }
+  const serializedChanges = JSON.stringify(changes);
+  const payloadBytes = new TextEncoder().encode(serializedChanges).byteLength;
+  if (payloadBytes > MAX_TENANT_SYNC_PAYLOAD_BYTES) {
+    return {
+      success: false,
+      reason: "sync_payload_too_large",
+      error: new Error(
+        "This sync exceeds the safe 7 MiB request limit. Your local data is preserved, but this backlog needs support before it can be uploaded.",
+      ),
+    };
+  }
 
   const { error } = await supabase.rpc(
-    "apply_organization_record_changes",
+    "apply_organization_record_changes_batched",
     {
       p_organization_id: organization.id,
       p_product_id: organization.productId,
@@ -515,4 +554,146 @@ export async function syncToSupabase(
   }
 
   return { success: true, revision: 0 };
+}
+
+export async function runTenantSyncSmokeTest(organization) {
+  if (!supabase || !navigator.onLine) {
+    throw new Error("Connect to the internet before running the tenant sync test.");
+  }
+  if (!organization?.id || !organization?.productId || !organization?.userId) {
+    throw new Error("A signed-in company session is required for the tenant sync test.");
+  }
+
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!authData.user || authData.user.id !== organization.userId) {
+    throw new Error("The signed-in user does not match this company session.");
+  }
+
+  const baseline = await fetchFromSupabase(organization);
+  if (!baseline.success) {
+    throw baseline.error || new Error("Could not read the tenant cloud baseline.");
+  }
+  if (baseline.migrationRequired) {
+    throw new Error(
+      "This company still has a legacy document awaiting owner-approved migration.",
+    );
+  }
+
+  const batchProbePrefix = `sync-smoke-batch-${crypto.randomUUID()}`;
+  const batchProbeChanges = Array.from(
+    { length: TENANT_SYNC_BATCH_SIZE + 1 },
+    (_, index) => ({
+      operation: "delete",
+      collection: "notifications",
+      id: `${batchProbePrefix}-${index}`,
+      expectedUpdatedAt: null,
+    }),
+  );
+  const { data: batchProbeCount, error: batchProbeError } = await supabase.rpc(
+    "apply_organization_record_changes_batched",
+    {
+      p_organization_id: organization.id,
+      p_product_id: organization.productId,
+      p_changes: batchProbeChanges,
+    },
+  );
+  if (batchProbeError) throw batchProbeError;
+  if (Number(batchProbeCount) !== TENANT_SYNC_BATCH_SIZE + 1) {
+    throw new Error(
+      "The tenant sync batch-boundary check did not process all 1,001 changes.",
+    );
+  }
+
+  const recordId = `sync-smoke-${crypto.randomUUID()}`;
+  const readProbe = () =>
+    supabase
+      .from("organization_records")
+      .select("record_id, data, created_by, updated_at")
+      .eq("organization_id", organization.id)
+      .eq("product_id", organization.productId)
+      .eq("collection", "notifications")
+      .eq("record_id", recordId)
+      .maybeSingle();
+  const applyProbeChange = (change) =>
+    supabase.rpc("apply_organization_record_changes_batched", {
+      p_organization_id: organization.id,
+      p_product_id: organization.productId,
+      p_changes: [change],
+    });
+
+  let probeMayExist = true;
+  try {
+    const { error: insertError } = await applyProbeChange({
+      operation: "upsert",
+      collection: "notifications",
+      id: recordId,
+      data: {
+        id: recordId,
+        title: "Temporary tenant sync check",
+        message: "Temporary verification record; safe to remove.",
+        syncSmokeTest: true,
+      },
+      expectedUpdatedAt: null,
+    });
+    if (insertError) throw insertError;
+
+    const { data: saved, error: readError } = await readProbe();
+    if (readError) throw readError;
+    if (
+      !saved ||
+      saved.created_by !== authData.user.id ||
+      saved.data?.id !== recordId
+    ) {
+      throw new Error(
+        "The test record was not visible through the signed-in tenant read policy.",
+      );
+    }
+
+    const { error: deleteError } = await applyProbeChange({
+      operation: "delete",
+      collection: "notifications",
+      id: recordId,
+      expectedUpdatedAt: saved.updated_at,
+    });
+    if (deleteError) throw deleteError;
+
+    const { data: remaining, error: verifyDeleteError } = await readProbe();
+    if (verifyDeleteError) throw verifyDeleteError;
+    if (remaining) {
+      throw new Error("The temporary test record could not be confirmed deleted.");
+    }
+    probeMayExist = false;
+
+    return {
+      success: true,
+      organizationId: organization.id,
+      batchBoundaryVerified: true,
+      recordRoundTrip: true,
+      cleanupConfirmed: true,
+    };
+  } catch (error) {
+    if (probeMayExist) {
+      const { data: existing, error: cleanupReadError } = await readProbe();
+      if (cleanupReadError) {
+        throw new Error(
+          `Tenant sync test failed (${error.message}); cleanup lookup also failed (${cleanupReadError.message}). Probe ID: ${recordId}`,
+        );
+      }
+      if (existing) {
+        const { error: cleanupError } = await applyProbeChange({
+          operation: "delete",
+          collection: "notifications",
+          id: recordId,
+          expectedUpdatedAt: existing.updated_at,
+        });
+        if (cleanupError) {
+          throw new Error(
+            `Tenant sync test failed (${error.message}); temporary probe cleanup failed (${cleanupError.message}). Probe ID: ${recordId}`,
+          );
+        }
+      }
+    }
+    throw error;
+  }
 }

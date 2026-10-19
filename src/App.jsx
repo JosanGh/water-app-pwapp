@@ -1,4 +1,12 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+} from "react";
 import { Droplets } from "lucide-react";
 import {
   createOrganization,
@@ -8,6 +16,9 @@ import {
   getPersistedSessionUser,
   getOrganization,
   getSupabaseStatus,
+  isPlatformSubscriptionAdmin,
+  organizationHasSubscriptionAccess,
+  runTenantSyncSmokeTest,
   requestPasswordReset,
   signIn,
   signOut,
@@ -21,10 +32,13 @@ import {
   cacheOrganizationContext,
   clearOfflineAccess,
   clearTenantCache,
+  downloadPendingTenantCache,
   enableOfflineAccess,
   emptyData,
+  hasDownloadedPendingTenantCache,
   getOfflineAccessProfile,
   getCachedOrganizationContext,
+  hasPendingTenantCache,
   loadData,
   saveData,
   refreshData,
@@ -34,53 +48,117 @@ import {
 import { uid } from "./lib/helpers";
 import { CSS_TOOLKIT } from "./styles/styles";
 import { getRoleMeta, hasPermission } from "./config/roles";
-import { Toast } from "./components/Toast";
+import { isProductPage, PRODUCTS } from "./config/products";
+import { Toast } from "./components/water-factory/Toast";
 import { LoginScreen } from "./components/LoginScreen";
-import { BusinessDetailsModal } from "./components/BusinessDetailsModal";
-import { Sidebar, TopBar } from "./components/Navigation";
-import { TermsAndPolicy } from "./components/TermsAndPolicy";
+import { BusinessDetailsModal } from "./components/water-factory/BusinessDetailsModal";
+import { Sidebar, TopBar } from "./components/water-factory/Navigation";
+import { TermsAndPolicy } from "./components/water-factory/TermsAndPolicy";
 const Dashboard = lazy(() =>
-  import("./components/Dashboard").then((module) => ({
+  import("./components/water-factory/Dashboard").then((module) => ({
     default: module.Dashboard,
   })),
 );
 const WarehouseModule = lazy(() =>
-  import("./components/WarehouseAndPackingModule").then((module) => ({
-    default: module.WarehouseModule,
-  })),
+  import("./components/water-factory/WarehouseAndPackingModule").then(
+    (module) => ({
+      default: module.WarehouseModule,
+    }),
+  ),
 );
 const ProductionModule = lazy(() =>
-  import("./components/ProductionModule").then((module) => ({
+  import("./components/water-factory/ProductionModule").then((module) => ({
     default: module.ProductionModule,
   })),
 );
 const SalesModule = lazy(() =>
-  import("./components/SalesModule").then((module) => ({
+  import("./components/water-factory/SalesModule").then((module) => ({
     default: module.SalesModule,
   })),
 );
 const ReportsModule = lazy(() =>
-  import("./components/ReportsAndDrivers").then((module) => ({
+  import("./components/water-factory/ReportsAndDrivers").then((module) => ({
     default: module.ReportsModule,
   })),
 );
 const AdminManagementModule = lazy(() =>
-  import("./components/AdminAndRole").then((module) => ({
+  import("./components/water-factory/AdminAndRole").then((module) => ({
     default: module.AdminManagementModule,
   })),
 );
 const AuditLog = lazy(() =>
-  import("./components/AuditLog").then((module) => ({
+  import("./components/water-factory/AuditLog").then((module) => ({
     default: module.AuditLog,
+  })),
+);
+const OverallGeneralReportView = lazy(() =>
+  import("./components/water-factory/OverallGeneralReportView").then(
+    (module) => ({
+      default: module.OverallGeneralReportView,
+    }),
+  ),
+);
+const ElectricalShopDashboard = lazy(() =>
+  import("./components/electrical/dashboard").then((module) => ({
+    default: module.ElectricalShopDashboard,
+  })),
+);
+const SupermarketDashboard = lazy(() =>
+  import("./components/supermarket/dashboard").then((module) => ({
+    default: module.SupermarketDashboard,
+  })),
+);
+const SubscriptionAdminPortal = lazy(() =>
+  import("./components/admin/SubscriptionAdminPortal").then((module) => ({
+    default: module.SubscriptionAdminPortal,
   })),
 );
 const ACTIVE_PAGE_KEY = "pureledger_active_page";
 const WORKSPACE_PRODUCT_KEY = "pureledger_workspace_product";
 
+class WorkspacePageBoundary extends Component {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.error("Workspace page failed to render:", error);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <section
+          role="alert"
+          className="rounded-2xl border border-amber-300 bg-amber-50 p-6 text-amber-950"
+        >
+          <h1 className="text-lg font-bold">This page could not be loaded</h1>
+          <p className="mt-2 text-sm">
+            Your saved company data has not been cleared. Check your connection,
+            then reload the app to try again.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-4 rounded-lg bg-[#0B3B45] px-4 py-2 text-sm font-semibold text-white"
+          >
+            Reload app
+          </button>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [authUser, setAuthUser] = useState(null);
   const [organization, setOrganization] = useState(null);
+  const [platformSubscriptionAdmin, setPlatformSubscriptionAdmin] =
+    useState(false);
   const [offlineProfile, setOfflineProfile] = useState(null);
   const [offlineRecoveryRequired, setOfflineRecoveryRequired] = useState(false);
 
@@ -118,8 +196,6 @@ export default function App() {
     document.title = organization?.name || "Water Operations";
   }, [organization?.name]);
 
-<<<<<<< HEAD
-=======
   useEffect(() => {
     if (!import.meta.env.DEV || !organization) return undefined;
     const smokeTest = () => runTenantSyncSmokeTest(organization);
@@ -139,7 +215,6 @@ export default function App() {
     setWorkspaceProductId(productId);
   }, []);
 
->>>>>>> 82f9053 (Top)
   const activateUser = useCallback(async (
     user,
     offlineOrganization = null,
@@ -148,10 +223,10 @@ export default function App() {
     selectedProductId = workspaceProductId,
   ) => {
     setAuthError("");
-    const memberOrganization =
-      offlineOrganization ||
-      (await getOrganization(user.id, selectedProductId));
-    if (!memberOrganization) {
+    const isPlatformAdmin =
+      navigator.onLine && (await isPlatformSubscriptionAdmin());
+    setPlatformSubscriptionAdmin(isPlatformAdmin);
+    if (isPlatformAdmin) {
       setAuthUser(user);
       setOrganization(null);
       setSession(null);
@@ -160,11 +235,19 @@ export default function App() {
       return;
     }
 
-    const loadedTenant =
-      offlineSnapshot || (await loadData(memberOrganization));
-    revisionRef.current = loadedTenant.revision;
-    cloudBaseDataRef.current = loadedTenant.cloudData || null;
-    if (offlineKey) offlineKeyRef.current = offlineKey;
+    const memberOrganization =
+      offlineOrganization ||
+      (await getOrganization(user.id, selectedProductId));
+    if (!memberOrganization) {
+      setAuthUser(user);
+      setOrganization(null);
+      setPlatformSubscriptionAdmin(false);
+      setSession(null);
+      setData(emptyData);
+      setLoaded(true);
+      return;
+    }
+
     if (navigator.onLine) {
       try {
         cacheOrganizationContext(user.id, memberOrganization);
@@ -172,6 +255,22 @@ export default function App() {
         console.error("Could not cache the company session for offline use:", error);
       }
     }
+
+    if (!organizationHasSubscriptionAccess(memberOrganization)) {
+      setAuthUser(user);
+      setOrganization(memberOrganization);
+      setSession(null);
+      setData(emptyData);
+      setLoaded(true);
+      setSyncStatus("idle");
+      return;
+    }
+
+    const loadedTenant =
+      offlineSnapshot || (await loadData(memberOrganization));
+    revisionRef.current = loadedTenant.revision;
+    cloudBaseDataRef.current = loadedTenant.cloudData || null;
+    if (offlineKey) offlineKeyRef.current = offlineKey;
     setAuthUser(user);
     setOrganization(memberOrganization);
     setSession({
@@ -194,6 +293,36 @@ export default function App() {
     });
     setLoaded(true);
   }, [workspaceProductId]);
+
+  useEffect(() => {
+    if (!session || !organization) return undefined;
+    const accessEndsAt =
+      organization.subscriptionStatus === "active"
+        ? organization.graceUntil || organization.expiresAt
+        : organization.subscriptionStatus === "grace_period"
+          ? organization.graceUntil
+          : null;
+    if (!accessEndsAt) return undefined;
+
+    const remainingMs = new Date(accessEndsAt).getTime() - Date.now();
+    if (!Number.isFinite(remainingMs)) return undefined;
+    const timeout = window.setTimeout(() => {
+      setSession(null);
+      setData(emptyData);
+      setSyncStatus("idle");
+      setOrganization((current) =>
+        current
+          ? {
+              ...current,
+              subscriptionStatus: "expired",
+              hasSubscriptionAccess: false,
+            }
+          : current,
+      );
+    }, Math.max(0, remainingMs));
+
+    return () => window.clearTimeout(timeout);
+  }, [organization, session]);
 
   const showToast = useCallback((msg, tone = "ok") => {
     setToast({ msg, tone });
@@ -258,6 +387,7 @@ export default function App() {
         setPasswordRecovery(false);
         setAuthUser(null);
         setOrganization(null);
+        setPlatformSubscriptionAdmin(false);
         setSession(null);
         setData(emptyData);
         setLoaded(false);
@@ -277,12 +407,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-<<<<<<< HEAD
-    if (!session || hasPermission(session.role, page)) return;
-    const landingPage = getRoleMeta(session.role).defaultLandingPage;
-    if (landingPage !== page) handlePageChange(landingPage);
-  }, [handlePageChange, page, session]);
-=======
     if (!session || !organization) return;
     if (organization.productId !== PRODUCTS.water.id) {
       if (page !== organization.productId) {
@@ -298,7 +422,6 @@ export default function App() {
       if (landingPage !== page) handlePageChange(landingPage);
     }
   }, [handlePageChange, organization, page, session]);
->>>>>>> 82f9053 (Top)
 
   const persistTenantData = useCallback(
     (nextData, tenant = organization) => {
@@ -334,9 +457,11 @@ export default function App() {
       return;
     if (syncStatus === "migration_required") return;
     try {
-      if (syncStatus === "conflict") {
+      if (syncStatus === "conflict" || syncStatus === "legacy_conflict") {
         showToast(
-          "Sync conflict: local entries are preserved. Ask the company owner to reconcile changes before continuing.",
+          syncStatus === "legacy_conflict"
+            ? "Local data predates tenant-record sync. Export it before replacing this device copy with cloud data."
+            : "Sync conflict: local entries are preserved. Ask the company owner to reconcile changes before continuing.",
           "warn",
         );
         return;
@@ -399,9 +524,12 @@ export default function App() {
 
   const mutate = useCallback(
     (updater, auditAction, auditDetail) => {
-      if (syncStatus === "migration_required") {
+      if (
+        syncStatus === "migration_required" ||
+        syncStatus === "legacy_conflict"
+      ) {
         showToast(
-          "Company records are locked until the owner imports the verified legacy document.",
+          "Company records are locked until the pending data is reconciled.",
           "warn",
         );
         return;
@@ -444,7 +572,9 @@ export default function App() {
               );
               if (!result.syncResult.conflict) {
                 showToast(
-                  "Saved on this device, but cloud sync is not confirmed.",
+                  result.syncResult.error?.message
+                    ? `Saved on this device, but cloud sync failed: ${result.syncResult.error.message}`
+                    : "Saved on this device, but cloud sync is not confirmed.",
                   "warn",
                 );
               }
@@ -772,6 +902,7 @@ export default function App() {
 
     setAuthUser(null);
     setOrganization(null);
+    setPlatformSubscriptionAdmin(false);
     setSession(null);
     setData(emptyData);
     setLoaded(false);
@@ -785,7 +916,10 @@ export default function App() {
   };
 
   const handleSaveBusinessDetails = async (details) => {
-    if (syncStatus === "migration_required") {
+    if (
+      syncStatus === "migration_required" ||
+      syncStatus === "legacy_conflict"
+    ) {
       showToast(
         "Company records are locked until the owner imports the verified legacy document.",
         "warn",
@@ -822,6 +956,14 @@ export default function App() {
   };
 
   const handleLegacyBackfillComplete = async () => {
+    if (
+      hasPendingTenantCache(organization.id) &&
+      !hasDownloadedPendingTenantCache(organization.id)
+    ) {
+      throw new Error(
+        "This device has unsynced legacy entries without a cloud baseline. Download the device backup in Company Settings before importing, then reconcile it separately.",
+      );
+    }
     const copied = await backfillOrganizationDocument(
       organization.id,
       organization.productId,
@@ -846,6 +988,49 @@ export default function App() {
       },
     });
     setSyncStatus("synced");
+  };
+
+  const handleDownloadPendingTenantCache = () => {
+    try {
+      if (!downloadPendingTenantCache(organization.id)) {
+        showToast("There is no pending local backup on this device.", "warn");
+        return;
+      }
+      showToast("Pending local data backup downloaded. Keep it for reconciliation.");
+    } catch (error) {
+      showToast(`Local backup could not be downloaded: ${error.message}`, "warn");
+    }
+  };
+
+  const handleUseCloudAfterLegacyConflict = async () => {
+    if (!hasDownloadedPendingTenantCache(organization.id)) {
+      showToast("Download the pending device backup before continuing.", "warn");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Replace this device's unsynced legacy data with the current company cloud data? The downloaded backup will remain available for manual reconciliation.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const remote = await refreshData(organization);
+      if (!remote.success) {
+        showToast(
+          `Cloud data could not be loaded: ${remote.error?.message || "refresh failed"}`,
+          "warn",
+        );
+        return;
+      }
+      revisionRef.current = remote.revision;
+      cloudBaseDataRef.current = remote.cloudData;
+      setData(remote.data);
+      setSyncStatus("synced");
+      showToast("This device now has the current cloud data.");
+    } catch (error) {
+      showToast(`Cloud data could not be loaded: ${error.message}`, "warn");
+    }
   };
 
   if (authLoading) {
@@ -879,12 +1064,52 @@ export default function App() {
     );
   }
 
+  if (platformSubscriptionAdmin && authUser) {
+    return (
+      <div className="min-h-screen bg-[#F2F4EF] text-[#16211F] font-body">
+        <style dangerouslySetInnerHTML={{ __html: CSS_TOOLKIT }} />
+        <header className="flex items-center justify-between bg-[#0B3B45] px-4 py-4 text-white sm:px-6">
+          <div>
+            <h1 className="font-bold">Platform Subscription Administration</h1>
+            <p className="text-xs text-[#B9CFCE]">{authUser.email}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleLogout()}
+            className="rounded-lg border border-[#6D8888] px-3 py-2 text-sm font-semibold"
+          >
+            Sign out
+          </button>
+        </header>
+        <main className="p-4 sm:p-6">
+          <Suspense
+            fallback={
+              <div className="rounded-xl border border-[#DDE3DA] bg-white p-6 text-sm text-[#5B6B68]">
+                Loading subscription administration…
+              </div>
+            }
+          >
+            <SubscriptionAdminPortal
+              supabase={supabase}
+              showToast={showToast}
+            />
+          </Suspense>
+        </main>
+        {toast && <Toast msg={toast.msg} tone={toast.tone} />}
+      </div>
+    );
+  }
+
   if (!session) {
     return (
       <LoginScreen
         error={authError}
         workspaceRequired={Boolean(authUser) && !offlineRecoveryRequired}
         companyName={organization?.name || ""}
+        organizationId={organization?.id || null}
+        organizationRole={organization?.role || null}
+        subscriptionStatus={organization?.subscriptionStatus || null}
+        graceUntil={organization?.graceUntil || null}
         offlineAccessAvailable={Boolean(offlineProfile) && !online}
         offlineRecoveryRequired={offlineRecoveryRequired}
         offlineCompanyName={offlineProfile?.organization.name || ""}
@@ -908,11 +1133,6 @@ export default function App() {
     );
   }
 
-<<<<<<< HEAD
-  const activePage = hasPermission(session.role, page)
-    ? page
-    : getRoleMeta(session.role).defaultLandingPage;
-=======
   const isCurrentProductPage =
     isProductPage(page) && page === organization.productId;
   const activePage =
@@ -923,7 +1143,6 @@ export default function App() {
         : hasPermission(session.role, page)
           ? page
           : getRoleMeta(session.role).defaultLandingPage;
->>>>>>> 82f9053 (Top)
 
   return (
     <div className="min-h-screen bg-[#F2F4EF] text-[#16211F] font-body">
@@ -965,21 +1184,40 @@ export default function App() {
             onRemoveOfflineAccess={handleRemoveOfflineAccess}
           />
           <main className="p-4 sm:p-6 max-w-6xl mx-auto">
-            {syncStatus === "migration_required" && (
+            {(syncStatus === "migration_required" ||
+              syncStatus === "legacy_conflict") && (
               <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
-                Legacy company data must be reviewed and imported by the owner
-                before this workspace can be edited. Open Company Settings and
-                use “Import verified legacy records” only after confirming the
-                old document belongs to this company.
+                {syncStatus === "migration_required"
+                  ? "Legacy company data must be reviewed and imported by the owner before this workspace can be edited. Open Company Settings and use “Import verified legacy records” only after confirming the old document belongs to this company."
+                  : "This device has pending data from the previous whole-document sync model. It cannot be safely merged automatically. Download a backup, then choose whether to keep the local copy for manual reconciliation or replace it with current cloud data."}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadPendingTenantCache}
+                    className="rounded-lg border border-amber-700 px-3 py-2 font-semibold"
+                  >
+                    Download pending device data
+                  </button>
+                  {syncStatus === "legacy_conflict" && (
+                    <button
+                      type="button"
+                      onClick={handleUseCloudAfterLegacyConflict}
+                      className="rounded-lg border border-amber-700 px-3 py-2 font-semibold"
+                    >
+                      Replace with cloud data
+                    </button>
+                  )}
+                </div>
               </div>
             )}
-            <Suspense
-              fallback={
-                <div className="rounded-xl border border-[#DDE3DA] bg-white p-6 text-sm text-[#5B6B68]">
-                  Loading workspace...
-                </div>
-              }
-            >
+            <WorkspacePageBoundary key={activePage}>
+              <Suspense
+                fallback={
+                  <div className="rounded-xl border border-[#DDE3DA] bg-white p-6 text-sm text-[#5B6B68]">
+                    Loading workspace...
+                  </div>
+                }
+              >
               {activePage === "dashboard" &&
                 hasPermission(session.role, "dashboard") && (
                   <Dashboard
@@ -1035,18 +1273,24 @@ export default function App() {
                     syncStatus={syncStatus}
                     onSaveBusinessDetails={handleSaveBusinessDetails}
                     onLegacyBackfillComplete={handleLegacyBackfillComplete}
+                    onDownloadPendingTenantCache={handleDownloadPendingTenantCache}
                   />
                 )}
               {activePage === "audit" &&
                 hasPermission(session.role, "audit") && (
                   <AuditLog data={data} mutate={mutate} showToast={showToast} />
                 )}
+              {activePage === "overall-report" &&
+                session.role === "owner" && (
+                  <OverallGeneralReportView
+                    data={data}
+                    organization={organization}
+                    session={session}
+                  />
+                )}
               {activePage === "terms" && (
                 <TermsAndPolicy companyName={organization.name} />
               )}
-<<<<<<< HEAD
-            </Suspense>
-=======
               {organization.productId === PRODUCTS.electricalShop.id &&
                 activePage === PRODUCTS.electricalShop.id && (
                 <ElectricalShopDashboard />
@@ -1057,7 +1301,6 @@ export default function App() {
               )}
               </Suspense>
             </WorkspacePageBoundary>
->>>>>>> 82f9053 (Top)
           </main>
         </div>
       </div>

@@ -21,6 +21,7 @@ const TENANT_CONTEXT_KEY = "water-app-tenant-context";
 const OFFLINE_VAULT_KEY = "water-app-offline-vault";
 const OFFLINE_USER_KEY = "water-app-offline-user";
 const OFFLINE_PIN_ITERATIONS = 310000;
+const LEGACY_EXPORT_KEY = "water-app-legacy-exported";
 
 export function isValidOfflinePin(pin) {
   if (!/^[a-z\d]{6}$/i.test(pin)) return false;
@@ -402,6 +403,51 @@ function getTenantStorageKey(organizationId) {
   return `${STORAGE_KEY}:${organizationId}`;
 }
 
+function getTenantCache(organizationId) {
+  const raw = localStorage.getItem(getTenantStorageKey(organizationId));
+  if (!raw) return null;
+  const parsed = JSON.parse(raw);
+  if (parsed?.cacheVersion === 1 && parsed.data) return parsed;
+  return {
+    cacheVersion: 0,
+    data: parsed,
+    pending: true,
+    cloudData: null,
+  };
+}
+
+export function hasPendingTenantCache(organizationId) {
+  const cache = getTenantCache(organizationId);
+  return Boolean(cache?.pending);
+}
+
+export function downloadPendingTenantCache(organizationId) {
+  const cache = getTenantCache(organizationId);
+  if (!cache?.pending) return false;
+
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    organizationId,
+    note: "Unconfirmed local data. Reconcile with the owner before importing.",
+    cache,
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `water-app-pending-${organizationId}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  localStorage.setItem(`${LEGACY_EXPORT_KEY}:${organizationId}`, "true");
+  return true;
+}
+
+export function hasDownloadedPendingTenantCache(organizationId) {
+  return localStorage.getItem(`${LEGACY_EXPORT_KEY}:${organizationId}`) === "true";
+}
+
 function readTenantCache(storageKey) {
   try {
     const raw = localStorage.getItem(storageKey);
@@ -457,17 +503,19 @@ export async function loadData(organization) {
         return {
           data: localCache?.data || normalizeData(remoteResult.data),
           revision: localCache?.revision || remoteResult.revision,
-          syncStatus: localCache?.pending ? "conflict" : "migration_required",
+          syncStatus: "migration_required",
           cloudData: null,
         };
       }
       if (localCache?.pending) {
-        if (!localCache.cloudData) {
+        if (
+          localCache.cloudData?.tenantRecordBaselineVersion !== 1
+        ) {
           return {
             data: localCache.data,
             revision: localCache.revision,
-            syncStatus: "conflict",
-            cloudData: null,
+            syncStatus: "legacy_conflict",
+            cloudData: remoteResult.data,
           };
         }
         const syncResult = await syncToSupabase(
@@ -562,6 +610,14 @@ export async function loadData(organization) {
 export async function refreshData(organization) {
   const result = await fetchFromSupabase(organization);
   if (!result.success) return { success: false, error: result.error };
+  if (result.migrationRequired) {
+    return {
+      success: false,
+      error: new Error(
+        "The owner must import the verified legacy company document before cloud data can be refreshed.",
+      ),
+    };
+  }
   if (!result.data) {
     return {
       success: true,
