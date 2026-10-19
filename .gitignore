@@ -85,6 +85,7 @@ dumps/
 *.sql
 !supabase-migrate-safe.sql
 !supabase-tenant-records.sql
+!supabase-live-sync-hardening.sql
 *.sql.gz
 *.tar.gz
 

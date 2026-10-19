@@ -2,7 +2,35 @@ import React, { useState } from "react";
 import { Droplets, Mail } from "lucide-react";
 import { getSupabaseStatus } from "../lib/supabaseClient";
 import { isValidOfflinePin } from "../lib/storage";
+<<<<<<< HEAD
 import { TermsAndPolicy } from "./TermsAndPolicy";
+=======
+import { TermsAndPolicy } from "./water-factory/TermsAndPolicy";
+import { PRODUCT_OPTIONS, PRODUCTS } from "../config/products";
+
+function WorkspaceProductSelect({ value, onChange }) {
+  return (
+    <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+      Workspace
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="inp mt-1"
+        required
+      >
+        {PRODUCT_OPTIONS.map((product) => (
+          <option key={product.id} value={product.id}>
+            {product.name}
+          </option>
+        ))}
+      </select>
+      <span className="mt-1 block normal-case font-normal">
+        Each workspace is separate and needs its own subscription.
+      </span>
+    </label>
+  );
+}
+>>>>>>> 82f9053 (Top)
 
 export function LoginScreen({
   error = "",
@@ -19,6 +47,12 @@ export function LoginScreen({
   offlineRecoveryRequired = false,
   offlineCompanyName = "",
   onUnlockOffline,
+<<<<<<< HEAD
+=======
+  workspaceProductId = PRODUCTS.water.id,
+  onWorkspaceProductChange = () => {},
+  showToast = (msg) => alert(msg),
+>>>>>>> 82f9053 (Top)
 }) {
   const [view, setView] = useState("login");
   const [email, setEmail] = useState("");
@@ -27,6 +61,8 @@ export function LoginScreen({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [newCompanyName, setNewCompanyName] = useState("");
+  const [selectedWorkspaceProduct, setSelectedWorkspaceProduct] =
+    useState(workspaceProductId);
   const [inviteCode, setInviteCode] = useState("");
   const [fullName, setFullName] = useState("");
   const [workspaceMode, setWorkspaceMode] = useState("create");
@@ -60,10 +96,14 @@ export function LoginScreen({
       return;
     }
     run(async () => {
-      const signedIn = await onSignUp(email, password);
+      const signedIn = await onSignUp(
+        email,
+        password,
+        selectedWorkspaceProduct,
+      );
       setMessage(
         signedIn
-          ? "Account created. Create your company workspace to continue."
+          ? `Account created. Register your ${PRODUCT_OPTIONS.find((p) => p.id === selectedWorkspaceProduct)?.name || "selected"} workspace to continue.`
           : "Check your email to verify your account, then sign in.",
       );
     });
@@ -92,7 +132,14 @@ export function LoginScreen({
 
   const handleCreateOrganization = (event) => {
     event.preventDefault();
-    run(() => onCreateOrganization(newCompanyName));
+    run(() =>
+      onCreateOrganization(newCompanyName, selectedWorkspaceProduct),
+    );
+  };
+
+  const handleWorkspaceProductChange = (productId) => {
+    setSelectedWorkspaceProduct(productId);
+    onWorkspaceProductChange(productId);
   };
 
   return (
@@ -234,6 +281,93 @@ export function LoginScreen({
               <p className="text-xs font-semibold text-[#C4472F]">
                 {formError || error}
               </p>
+<<<<<<< HEAD
+=======
+
+              <div className="flex flex-col gap-2 pt-2">
+                <a
+                  href="https://wa.me/233542804240?text=Hello,%20I%20need%20a%20subscription%20token%20for%20my%20ERP%20workspace."
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-semibold text-xs flex items-center justify-center gap-2 hover:bg-emerald-700 transition-colors"
+                >
+                  💬 Chat on WhatsApp for Token
+                </a>
+
+                <a
+                  href="tel:+233542804240"
+                  className="w-full py-2.5 rounded-xl border border-[#DDE3DA] text-[#0B3B45] dark:text-cyan-300 font-semibold text-xs flex items-center justify-center gap-2 hover:bg-gray-50 dark:hover:bg-[#1C2C33]"
+                >
+                  📞 Call Support: +233 542 804 240
+                </a>
+
+                {organizationId && organizationRole === "owner" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsTokenModalOpen(true)}
+                    className="btn-primary w-full py-2.5 text-xs mt-1"
+                  >
+                    I have a Subscription Token
+                  </button>
+                )}
+                {organizationId && organizationRole !== "owner" && (
+                  <p className="text-xs text-gray-600 dark:text-gray-300">
+                    Ask the company owner to redeem the subscription token.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Create Company Form */}
+            {!organizationId && (
+              <form onSubmit={handleCreateOrganization} className="space-y-4 pt-3 border-t border-[#DDE3DA]">
+                  <h1 className="font-bold text-[#0B3B45] text-lg">
+                    Create your company workspace
+                  </h1>
+                  <p className="text-sm text-[#5B6B68]">
+                    This creates an isolated tenant. Your records are not copied
+                    from legacy data automatically.
+                  </p>
+                  <WorkspaceProductSelect
+                    value={selectedWorkspaceProduct}
+                    onChange={handleWorkspaceProductChange}
+                  />
+                  <label className="block text-xs font-semibold text-[#5B6B68] uppercase">
+                    Company name
+                    <input
+                      value={newCompanyName}
+                      onChange={(event) => setNewCompanyName(event.target.value)}
+                      className="inp mt-1"
+                      maxLength={160}
+                      required
+                    />
+                  </label>
+                  {(error || formError) && (
+                    <p className="text-xs font-semibold text-[#C4472F]">
+                      {formError || error}
+                    </p>
+                  )}
+                  {message && (
+                    <p className="text-xs font-semibold text-green-700">
+                      {message}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    className="btn-primary w-full py-2.5"
+                    disabled={busy || !configured}
+                  >
+                    {busy ? "Creating…" : "Create company"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceMode("join")}
+                    className="w-full text-xs text-[#0B3B45] hover:underline"
+                  >
+                    Join an existing company with an invite code
+                  </button>
+                </form>
+>>>>>>> 82f9053 (Top)
             )}
             {message && (
               <p className="text-xs font-semibold text-green-700">{message}</p>
@@ -297,6 +431,10 @@ export function LoginScreen({
             onSubmit={view === "signup" ? handleSignUp : handleLogin}
             className="space-y-4"
           >
+            <WorkspaceProductSelect
+              value={selectedWorkspaceProduct}
+              onChange={handleWorkspaceProductChange}
+            />
             {!configured && (
               <p className="text-xs font-semibold text-[#C4472F]">
                 Cloud authentication is not configured. Sign-in is disabled.

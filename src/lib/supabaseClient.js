@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getProduct, PRODUCTS } from "../config/products";
 
 const SUPABASE_URL = import.meta.env?.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env?.VITE_SUPABASE_ANON_KEY || "";
@@ -86,8 +87,11 @@ export async function signOut() {
   if (error) throw error;
 }
 
-export async function getOrganization(userId) {
+export async function getOrganization(userId, productId = PRODUCTS.water.id) {
   const client = requireClient();
+  if (!getProduct(productId)) {
+    throw new Error("Choose a supported workspace.");
+  }
   const { data: memberships, error: membershipError } = await client
     .from("organization_memberships")
     .select("organization_id, full_name, role")
@@ -96,13 +100,43 @@ export async function getOrganization(userId) {
 
   if (membershipError) throw membershipError;
   if (!memberships?.length) return null;
-  if (memberships.length > 1) {
+
+  const organizationIds = memberships.map(
+    (membership) => membership.organization_id,
+  );
+  const { data: products, error: productError } = await client
+    .from("organization_products")
+    .select("organization_id, product_id")
+    .in("organization_id", organizationIds)
+    .eq("product_id", productId);
+  if (productError) throw productError;
+  const matchingMemberships = memberships.filter((membership) =>
+    products?.some(
+      (product) => product.organization_id === membership.organization_id,
+    ),
+  );
+  if (!matchingMemberships.length) return null;
+  if (matchingMemberships.length > 1) {
     throw new Error(
-      "This account belongs to multiple companies. Company selection must be configured before access.",
+      `This account belongs to multiple ${getProduct(productId).name} workspaces. Contact support to select the correct company.`,
     );
   }
 
-  const membership = memberships[0];
+  const membership = matchingMemberships[0];
+  const { data: organizationProducts, error: organizationProductsError } =
+    await client
+      .from("organization_products")
+      .select("product_id")
+      .eq("organization_id", membership.organization_id);
+  if (organizationProductsError) throw organizationProductsError;
+  if (
+    organizationProducts?.length !== 1 ||
+    organizationProducts[0].product_id !== productId
+  ) {
+    throw new Error(
+      "This company has multiple product entitlements. Contact support to separate its workspaces before continuing.",
+    );
+  }
   const { data: organization, error: organizationError } = await client
     .from("organizations")
     .select("id, name")
@@ -110,6 +144,7 @@ export async function getOrganization(userId) {
     .single();
 
   if (organizationError) throw organizationError;
+<<<<<<< HEAD
   const { data: product, error: productError } = await client
     .from("organization_products")
     .select("product_id")
@@ -120,24 +155,61 @@ export async function getOrganization(userId) {
   if (!product) {
     throw new Error("The water operations module is not enabled for this company.");
   }
+=======
+  const hasSubscriptionAccess = organizationHasSubscriptionAccess(organization);
+>>>>>>> 82f9053 (Top)
   return {
     id: organization.id,
     name: organization.name,
-    productId: product.product_id,
+    productId,
     userId,
     userName: membership.full_name,
     role: membership.role,
   };
 }
 
+<<<<<<< HEAD
 export async function createOrganization(name, userId) {
+=======
+export function organizationHasSubscriptionAccess(
+  organization,
+  now = Date.now(),
+) {
+  if (organization?.subscriptionStatus === "active") {
+    return (
+      (organization.subscriptionPlan === "one-time" &&
+        !organization.expiresAt) ||
+      (Boolean(organization.expiresAt) &&
+        new Date(organization.expiresAt).getTime() > now) ||
+      (Boolean(organization.graceUntil) &&
+        new Date(organization.graceUntil).getTime() > now)
+    );
+  }
+  if (organization?.subscriptionStatus === "grace_period") {
+    return (
+      Boolean(organization.graceUntil) &&
+      new Date(organization.graceUntil).getTime() > now
+    );
+  }
+  return false;
+}
+
+export async function createOrganization(
+  name,
+  userId,
+  productId = PRODUCTS.water.id,
+) {
+>>>>>>> 82f9053 (Top)
   const client = requireClient();
+  if (!getProduct(productId)) {
+    throw new Error("Choose a supported workspace.");
+  }
   const { error } = await client.rpc("create_organization", {
     p_name: name.trim(),
-    p_product_id: "water",
+    p_product_id: productId,
   });
   if (error) throw error;
-  return getOrganization(userId);
+  return getOrganization(userId, productId);
 }
 
 export async function createOrganizationInvite(organizationId, email, role) {
